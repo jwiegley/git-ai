@@ -179,6 +179,39 @@ mod tests {
     #[case("node")]
     #[case("chakracore")]
     #[ignore]
+    fn test_git_reset_head_5_mixed(#[case] repo_name: &str) {
+        let repos = get_performance_repos();
+        let test_repo = repos
+            .get(repo_name)
+            .expect(&format!("{} repo should be available", repo_name));
+
+        // Create a sampler that runs 10 times
+        let sampler = Sampler::new(10);
+
+        // Sample the performance of git reset HEAD~5 --mixed
+        let result = sampler.sample(test_repo, |repo| {
+            // Benchmark the reset operation with explicit --mixed flag
+            repo.benchmark_git(&["reset", "HEAD~5", "--mixed"])
+                .expect("Reset should succeed")
+        });
+
+        // Print the results
+        result.print_summary(&format!("git reset HEAD~5 --mixed ({})", repo_name));
+
+        let (percent_overhead, _) = result.average_overhead();
+
+        assert!(
+            percent_overhead < 20.0,
+            "Average overhead should be less than 20%"
+        );
+    }
+
+    #[rstest]
+    #[case("chromium")]
+    #[case("react")]
+    #[case("node")]
+    #[case("chakracore")]
+    #[ignore]
     fn test_human_only_edits_in_big_files_then_commit(#[case] repo_name: &str) {
         let repos = get_performance_repos();
         let test_repo = repos
