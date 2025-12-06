@@ -1008,3 +1008,59 @@ This project is open source and available for use.
         "This project is open source and available for use.".ai(),
     ]);
 }
+
+#[test]
+fn test_constructor_parameter_removal_attribution_bug() {
+    // Regression test for bug where removing a constructor parameter
+    // doesn't get attributed to AI when using mock_ai checkpoint
+    // This replicates the scenario where:
+    // - constructor(_config: Config, enabled: boolean = true) { [no-data]
+    // + constructor(enabled: boolean = true) { [no-data]
+    // The constructor line should be attributed to AI
+    use std::fs;
+
+    let repo = TestRepo::new();
+    let file_path = repo.path().join("git-ai-integration-service.ts");
+
+    // Initial commit: File with old constructor signature (all human)
+    fs::write(
+        &file_path,
+        "/**\n * Service for integrating git-ai hooks into the hook system.\n */\nexport class GitAiIntegrationService {\n  private readonly commandPath: string;\n  private registered = false;\n\n  constructor(_config: Config, enabled: boolean = true) {\n    this.enabled = enabled;\n    this.commandPath = 'git-ai';\n  }\n}\n",
+    )
+    .unwrap();
+
+    repo.git_ai(&["checkpoint"]).unwrap();
+    repo.stage_all_and_commit("Initial commit with old constructor").unwrap();
+
+    // Second commit: AI removes the _config parameter
+    fs::write(
+        &file_path,
+        "/**\n * Service for integrating git-ai hooks into the hook system.\n */\nexport class GitAiIntegrationService {\n  private readonly commandPath: string;\n  private registered = false;\n\n  constructor(enabled: boolean = true) {\n    this.enabled = enabled;\n    this.commandPath = 'git-ai';\n  }\n}\n",
+    )
+    .unwrap();
+
+    // Mark the change as AI-authored
+    repo.git_ai(&["checkpoint", "mock_ai", "git-ai-integration-service.ts"])
+        .unwrap();
+
+    let commit = repo
+        .stage_all_and_commit("AI removes constructor parameter")
+        .unwrap();
+
+    // Verify line-by-line attribution - the constructor line should be AI
+    let mut file = repo.filename("git-ai-integration-service.ts");
+    file.assert_lines_and_blame(lines![
+        "/**".human(),
+        " * Service for integrating git-ai hooks into the hook system.".human(),
+        " */".human(),
+        "export class GitAiIntegrationService {".human(),
+        "  private readonly commandPath: string;".human(),
+        "  private registered = false;".human(),
+        "".human(),
+        "  constructor(enabled: boolean = true) {".ai(), // Should be AI, not [no-data]
+        "    this.enabled = enabled;".human(),
+        "    this.commandPath = 'git-ai';".human(),
+        "  }".human(),
+        "}".human(),
+    ]);
+}
