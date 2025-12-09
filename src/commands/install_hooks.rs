@@ -1,4 +1,4 @@
-use crate::authorship::imara_diff_utils::{compute_line_changes, LineChangeTag};
+use crate::authorship::imara_diff_utils::{LineChangeTag, compute_line_changes};
 use crate::error::GitAiError;
 use crate::utils::debug_log;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -23,6 +23,198 @@ const CLAUDE_POST_TOOL_CMD: &str = "checkpoint claude --hook-input stdin";
 // Cursor hooks (requires absolute path to avoid shell config loading delay)
 const CURSOR_BEFORE_SUBMIT_CMD: &str = "checkpoint cursor --hook-input stdin";
 const CURSOR_AFTER_EDIT_CMD: &str = "checkpoint cursor --hook-input stdin";
+
+// OpenCode plugin content (TypeScript)
+const OPENCODE_PLUGIN_CONTENT: &str = r#"/**
+ * git-ai plugin for OpenCode
+ *
+ * This plugin integrates git-ai with OpenCode to track AI-generated code.
+ * It uses the tool.execute.before and tool.execute.after events to create
+ * checkpoints that mark code changes as human or AI-authored.
+ *
+ * Installation:
+ *   - Automatically installed by `git-ai install-hooks`
+ *   - Or manually copy to ~/.config/opencode/plugin/git-ai.ts (global)
+ *   - Or to .opencode/plugin/git-ai.ts (project-local)
+ *
+ * Requirements:
+ *   - git-ai must be installed and available in PATH
+ *
+ * @see https://github.com/acunniffe/git-ai
+ * @see https://opencode.ai/docs/plugins/
+ */
+
+import type { Plugin } from "@opencode-ai/plugin"
+import { dirname } from "path"
+
+// Tools that modify files and should be tracked
+const FILE_EDIT_TOOLS = ["edit", "write"]
+
+export const GitAiPlugin: Plugin = async (ctx) => {
+  const { $, client } = ctx
+
+  // Check if git-ai is installed
+  let gitAiInstalled = false
+  try {
+    await $`git-ai --version`.quiet()
+    gitAiInstalled = true
+  } catch {
+    // git-ai not installed, plugin will be a no-op
+  }
+
+  if (!gitAiInstalled) {
+    return {}
+  }
+
+  // Track pending edits by callID so we can reference them in the after hook
+  // Stores { filePath, repoDir, sessionID } for each pending edit
+  const pendingEdits = new Map<string, { filePath: string; repoDir: string; sessionID: string }>()
+
+  // Track the active model for each session
+  // Updated via chat.params hook
+  const sessionModels = new Map<string, string>()
+
+  // Helper to get model info from session
+  // Tries the cache first, then falls back to fetching messages
+  const getModelFromSession = async (sessionID: string): Promise<string> => {
+    // Check cache first (populated by chat.params)
+    if (sessionModels.has(sessionID)) {
+      return sessionModels.get(sessionID)!
+    }
+
+    try {
+      // Get recent messages from the session to find model info
+      const messages = await client.session.messages({ path: { id: sessionID }, query: { limit: 5 } })
+      if (messages.data) {
+        // Look for the most recent assistant message which has model info
+        for (const msg of messages.data) {
+          if (msg.info.role === "assistant") {
+            const assistantMsg = msg.info as { providerID?: string; modelID?: string }
+            if (assistantMsg.modelID) {
+              const providerID = assistantMsg.providerID || "unknown"
+              return `${providerID}/${assistantMsg.modelID}`
+            }
+          }
+          // User messages also have model info
+          if (msg.info.role === "user") {
+            const userMsg = msg.info as { model?: { providerID: string; modelID: string } }
+            if (userMsg.model?.modelID) {
+              return `${userMsg.model.providerID}/${userMsg.model.modelID}`
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore errors fetching session messages
+    }
+    return "unknown"
+  }
+
+  // Helper to find git repo root from a file path
+  const findGitRepo = async (filePath: string): Promise<string | null> => {
+    try {
+      const dir = dirname(filePath)
+      const result = await $`git -C ${dir} rev-parse --show-toplevel`.quiet()
+      const repoRoot = result.stdout.toString().trim()
+      return repoRoot || null
+    } catch {
+      // Not a git repo or git not available
+      return null
+    }
+  }
+
+  return {
+    "chat.params": async (input) => {
+      // Update the active model for this session
+      const { sessionID, model } = input
+      if (model.id) {
+        const providerID = model.providerID || "unknown"
+        const modelStr = `${providerID}/${model.id}`
+        sessionModels.set(sessionID, modelStr)
+      }
+    },
+
+    "tool.execute.before": async (input, output) => {
+      // Only intercept file editing tools
+      if (!FILE_EDIT_TOOLS.includes(input.tool)) {
+        return
+      }
+
+      // Extract file path from tool arguments (args are in output, not input)
+      const filePath = output.args?.filePath as string | undefined
+      if (!filePath) {
+        return
+      }
+
+      // Find the git repo for this file
+      const repoDir = await findGitRepo(filePath)
+      if (!repoDir) {
+        // File is not in a git repo, skip silently
+        return
+      }
+
+      // Store filePath, repoDir, and sessionID for the after hook
+      pendingEdits.set(input.callID, { filePath, repoDir, sessionID: input.sessionID })
+
+      try {
+        // Create human checkpoint before AI edit
+        // This marks any changes since the last checkpoint as human-authored
+        const hookInput = JSON.stringify({
+          type: "human",
+          repo_working_dir: repoDir,
+          will_edit_filepaths: [filePath],
+        })
+
+        await $`echo ${hookInput} | git-ai checkpoint agent-v1 --hook-input stdin`.quiet()
+      } catch (error) {
+        // Log to stderr for debugging, but don't throw - git-ai errors shouldn't break the agent
+        console.error("[git-ai] Failed to create human checkpoint:", String(error))
+      }
+    },
+
+    "tool.execute.after": async (input, _output) => {
+      // Only intercept file editing tools
+      if (!FILE_EDIT_TOOLS.includes(input.tool)) {
+        return
+      }
+
+      // Get the filePath and repoDir we stored in the before hook
+      const editInfo = pendingEdits.get(input.callID)
+      pendingEdits.delete(input.callID)
+
+      if (!editInfo) {
+        return
+      }
+
+      const { filePath, repoDir, sessionID } = editInfo
+
+      try {
+        // Get model info from session
+        const model = await getModelFromSession(sessionID)
+
+        // Create AI checkpoint after edit
+        // This marks the changes made by this tool call as AI-authored
+        const hookInput = JSON.stringify({
+          type: "ai_agent",
+          repo_working_dir: repoDir,
+          agent_name: "opencode",
+          model,
+          conversation_id: sessionID,
+          edited_filepaths: [filePath],
+          transcript: {
+            messages: [],
+          },
+        })
+
+        await $`echo ${hookInput} | git-ai checkpoint agent-v1 --hook-input stdin`.quiet()
+      } catch (error) {
+        // Log to stderr for debugging, but don't throw - git-ai errors shouldn't break the agent
+        console.error("[git-ai] Failed to create AI checkpoint:", String(error))
+      }
+    },
+  }
+}
+"#;
 
 pub fn run(args: &[String]) -> Result<(), GitAiError> {
     // Parse --dry-run flag (default: false)
@@ -125,8 +317,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     }
                     Ok(false) => {
                         if dry_run {
-                            extension_spinner
-                                .pending("Cursor: Pending extension install");
+                            extension_spinner.pending("Cursor: Pending extension install");
                         } else {
                             match install_vsc_editor_extension("cursor", "git-ai.git-ai-vscode") {
                                 Ok(()) => {
@@ -209,8 +400,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     }
                     Ok(false) => {
                         if dry_run {
-                            spinner
-                                .pending("VS Code: Pending extension install");
+                            spinner.pending("VS Code: Pending extension install");
                         } else {
                             match install_vsc_editor_extension("code", "git-ai.git-ai-vscode") {
                                 Ok(()) => {
@@ -275,6 +465,46 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
             spinner.error("VS Code: Version check failed");
             eprintln!("  Error: {}", version_error);
             eprintln!("  Please update VS Code to continue using git-ai hooks");
+        }
+    }
+
+    match check_opencode() {
+        Ok(true) => {
+            any_checked = true;
+            // Install/update OpenCode plugin
+            let spinner = Spinner::new("OpenCode: checking plugin");
+            spinner.start();
+
+            match install_opencode_hooks(dry_run) {
+                Ok(Some(diff)) => {
+                    if dry_run {
+                        spinner.pending("OpenCode: Pending plugin install");
+                    } else {
+                        spinner.success("OpenCode: Plugin installed");
+                    }
+                    println!(); // Blank line before diff
+                    print_diff(&diff);
+                    has_changes = true;
+                }
+                Ok(None) => {
+                    spinner.success("OpenCode: Plugin already up to date");
+                }
+                Err(e) => {
+                    spinner.error("OpenCode: Failed to install plugin");
+                    eprintln!("  Error: {}", e);
+                    eprintln!("  Check that ~/.config/opencode/plugin/ is writable");
+                }
+            }
+        }
+        Ok(false) => {
+            // OpenCode not detected
+        }
+        Err(version_error) => {
+            any_checked = true;
+            let spinner = Spinner::new("OpenCode: checking version");
+            spinner.start();
+            spinner.error("OpenCode: Version check failed");
+            eprintln!("  Error: {}", version_error);
         }
     }
 
@@ -418,6 +648,27 @@ fn check_vscode() -> Result<bool, String> {
             }
         }
     }
+
+    Ok(true)
+}
+
+fn check_opencode() -> Result<bool, String> {
+    let has_binary = binary_exists("opencode");
+    let has_global_config = {
+        let home = home_dir();
+        home.join(".config").join("opencode").exists()
+    };
+    let has_local_config = {
+        // Check if .opencode directory exists in current directory
+        Path::new(".opencode").exists()
+    };
+
+    if !has_binary && !has_global_config && !has_local_config {
+        return Ok(false);
+    }
+
+    // OpenCode doesn't have a minimum version requirement for now
+    // The plugin uses standard APIs that should work with any version
 
     Ok(true)
 }
@@ -860,6 +1111,62 @@ fn install_cursor_hooks(binary_path: &Path, dry_run: bool) -> Result<Option<Stri
     }
 
     Ok(Some(diff_output))
+}
+
+fn install_opencode_hooks(dry_run: bool) -> Result<Option<String>, GitAiError> {
+    // Install to global config directory: ~/.config/opencode/plugin/git-ai.ts
+    let plugin_path = opencode_plugin_path();
+
+    // Ensure directory exists
+    if let Some(dir) = plugin_path.parent() {
+        if !dry_run {
+            fs::create_dir_all(dir)?;
+        }
+    }
+
+    // Read existing content if present
+    let existing_content = if plugin_path.exists() {
+        fs::read_to_string(&plugin_path)?
+    } else {
+        String::new()
+    };
+
+    let new_content = OPENCODE_PLUGIN_CONTENT;
+
+    // Check if there are changes
+    if existing_content.trim() == new_content.trim() {
+        return Ok(None); // No changes needed
+    }
+
+    // Generate diff
+    let changes = compute_line_changes(&existing_content, new_content);
+    let mut diff_output = String::new();
+    diff_output.push_str(&format!("--- {}\n", plugin_path.display()));
+    diff_output.push_str(&format!("+++ {}\n", plugin_path.display()));
+
+    for change in changes {
+        let sign = match change.tag() {
+            LineChangeTag::Delete => "-",
+            LineChangeTag::Insert => "+",
+            LineChangeTag::Equal => " ",
+        };
+        diff_output.push_str(&format!("{}{}", sign, change.value()));
+    }
+
+    // Write if not dry-run
+    if !dry_run {
+        write_atomic(&plugin_path, new_content.as_bytes())?;
+    }
+
+    Ok(Some(diff_output))
+}
+
+fn opencode_plugin_path() -> PathBuf {
+    home_dir()
+        .join(".config")
+        .join("opencode")
+        .join("plugin")
+        .join("git-ai.ts")
 }
 
 fn claude_settings_path() -> PathBuf {
@@ -2219,5 +2526,142 @@ mod tests {
         assert!(!is_git_ai_checkpoint_command("git status"));
         assert!(!is_git_ai_checkpoint_command("checkpoint"));
         assert!(!is_git_ai_checkpoint_command("git-ai"));
+    }
+
+    // OpenCode tests
+    fn setup_opencode_test_env() -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_path = temp_dir
+            .path()
+            .join(".config")
+            .join("opencode")
+            .join("plugin")
+            .join("git-ai.ts");
+        (temp_dir, plugin_path)
+    }
+
+    #[test]
+    fn test_opencode_install_plugin_creates_file_from_scratch() {
+        let (_temp_dir, plugin_path) = setup_opencode_test_env();
+
+        // Ensure parent directory exists
+        if let Some(parent) = plugin_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+
+        // Write the plugin content
+        fs::write(&plugin_path, OPENCODE_PLUGIN_CONTENT).unwrap();
+
+        // Verify the file was created
+        assert!(plugin_path.exists());
+
+        // Verify the content contains expected elements
+        let content = fs::read_to_string(&plugin_path).unwrap();
+        assert!(content.contains("GitAiPlugin"));
+        assert!(content.contains("tool.execute.before"));
+        assert!(content.contains("tool.execute.after"));
+        assert!(content.contains("agent-v1"));
+        assert!(content.contains("opencode"));
+    }
+
+    #[test]
+    fn test_opencode_plugin_content_is_valid_typescript() {
+        // Verify the plugin content has expected TypeScript structure
+        let content = OPENCODE_PLUGIN_CONTENT;
+
+        // Check for required imports
+        assert!(content.contains("import type { Plugin }"));
+        assert!(content.contains("@opencode-ai/plugin"));
+
+        // Check for export
+        assert!(content.contains("export const GitAiPlugin: Plugin"));
+
+        // Check for hook handlers
+        assert!(content.contains("\"tool.execute.before\""));
+        assert!(content.contains("\"tool.execute.after\""));
+
+        // Check for file edit tools
+        assert!(content.contains("FILE_EDIT_TOOLS"));
+        assert!(content.contains("edit"));
+        assert!(content.contains("write"));
+
+        // Check for checkpoint calls
+        assert!(content.contains("git-ai checkpoint agent-v1"));
+        assert!(content.contains("type: \"human\""));
+        assert!(content.contains("type: \"ai_agent\""));
+    }
+
+    #[test]
+    fn test_opencode_plugin_skips_if_already_exists() {
+        let (_temp_dir, plugin_path) = setup_opencode_test_env();
+
+        // Ensure parent directory exists
+        if let Some(parent) = plugin_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+
+        // Write the plugin content
+        fs::write(&plugin_path, OPENCODE_PLUGIN_CONTENT).unwrap();
+
+        // Read it back
+        let content1 = fs::read_to_string(&plugin_path).unwrap();
+
+        // Write again (simulating re-install)
+        fs::write(&plugin_path, OPENCODE_PLUGIN_CONTENT).unwrap();
+
+        // Verify content is unchanged
+        let content2 = fs::read_to_string(&plugin_path).unwrap();
+        assert_eq!(content1, content2);
+    }
+
+    #[test]
+    fn test_opencode_plugin_updates_outdated_content() {
+        let (_temp_dir, plugin_path) = setup_opencode_test_env();
+
+        // Ensure parent directory exists
+        if let Some(parent) = plugin_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+
+        // Write old/different content
+        let old_content = "// Old plugin version\nexport const OldPlugin = {}";
+        fs::write(&plugin_path, old_content).unwrap();
+
+        // Verify old content
+        let content_before = fs::read_to_string(&plugin_path).unwrap();
+        assert!(content_before.contains("OldPlugin"));
+
+        // Write new content
+        fs::write(&plugin_path, OPENCODE_PLUGIN_CONTENT).unwrap();
+
+        // Verify new content
+        let content_after = fs::read_to_string(&plugin_path).unwrap();
+        assert!(content_after.contains("GitAiPlugin"));
+        assert!(!content_after.contains("OldPlugin"));
+    }
+
+    #[test]
+    fn test_opencode_plugin_handles_empty_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_path = temp_dir
+            .path()
+            .join(".config")
+            .join("opencode")
+            .join("plugin")
+            .join("git-ai.ts");
+
+        // Parent directory doesn't exist yet
+        assert!(!plugin_path.parent().unwrap().exists());
+
+        // Create directory and write file
+        if let Some(parent) = plugin_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&plugin_path, OPENCODE_PLUGIN_CONTENT).unwrap();
+
+        // Verify file was created
+        assert!(plugin_path.exists());
+        let content = fs::read_to_string(&plugin_path).unwrap();
+        assert!(content.contains("GitAiPlugin"));
     }
 }
