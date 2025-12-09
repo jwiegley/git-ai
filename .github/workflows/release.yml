@@ -295,9 +295,11 @@ jobs:
           # Convert checksums to pipe-separated format for embedding
           CHECKSUMS=$(cat release/SHA256SUMS | tr '\n' '|' | sed 's/|$//')
           # Replace placeholders in install.sh
-          sed -e "s/__VERSION_PLACEHOLDER__/$VERSION/g" \
-              -e "s|__CHECKSUMS_PLACEHOLDER__|$CHECKSUMS|g" \
-              repo/install.sh > release/install.sh
+          awk -v version="$VERSION" -v checksums="$CHECKSUMS" '{
+            gsub(/__VERSION_PLACEHOLDER__/, version)
+            gsub(/__CHECKSUMS_PLACEHOLDER__/, checksums)
+            print
+          }' repo/install.sh > release/install.sh
           chmod +x release/install.sh
           echo "Generated version-pinned install.sh for $VERSION"
           echo "Embedded checksums: $CHECKSUMS"
