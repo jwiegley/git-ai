@@ -10,6 +10,8 @@ use crate::config::Config;
 use crate::error::GitAiError;
 use crate::git::refs::notes_add;
 use crate::git::repository::Repository;
+use crate::observability::log_error;
+use crate::utils::debug_log;
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 
@@ -180,8 +182,18 @@ fn update_prompts_to_latest(checkpoints: &mut [Checkpoint]) -> Result<(), GitAiE
                             Some((latest_transcript, latest_model))
                         }
                         Ok(None) => None,
-                        Err(_e) => {
-                            // TODO Log error to sentry
+                        Err(e) => {
+                            debug_log(&format!(
+                                "Failed to fetch latest Cursor conversation for agent_id {}: {}",
+                                agent_id.id, e
+                            ));
+                            log_error(
+                                &e,
+                                Some(serde_json::json!({
+                                    "agent_tool": "cursor",
+                                    "operation": "fetch_latest_cursor_conversation"
+                                })),
+                            );
                             None
                         }
                     }
@@ -197,8 +209,18 @@ fn update_prompts_to_latest(checkpoints: &mut [Checkpoint]) -> Result<(), GitAiE
                                     // This handles both cases: initial load failure and getting latest version
                                     Some((transcript, model.unwrap_or_else(|| agent_id.model.clone())))
                                 }
-                                Err(_e) => {
-                                    // TODO Log error to sentry
+                                Err(e) => {
+                                    debug_log(&format!(
+                                        "Failed to parse GitHub Copilot chat session JSON from {} for agent_id {}: {}",
+                                        chat_session_path, agent_id.id, e
+                                    ));
+                                    log_error(
+                                        &e,
+                                        Some(serde_json::json!({
+                                            "agent_tool": "github-copilot",
+                                            "operation": "transcript_and_model_from_copilot_session_json"
+                                        })),
+                                    );
                                     None
                                 }
                             }
@@ -227,8 +249,18 @@ fn update_prompts_to_latest(checkpoints: &mut [Checkpoint]) -> Result<(), GitAiE
                                         model.unwrap_or_else(|| agent_id.model.clone()),
                                     ))
                                 }
-                                Err(_e) => {
-                                    // TODO Log error to sentry
+                                Err(e) => {
+                                    debug_log(&format!(
+                                        "Failed to parse Claude JSONL transcript from {} for agent_id {}: {}",
+                                        transcript_path, agent_id.id, e
+                                    ));
+                                    log_error(
+                                        &e,
+                                        Some(serde_json::json!({
+                                            "agent_tool": "claude",
+                                            "operation": "transcript_and_model_from_claude_code_jsonl"
+                                        })),
+                                    );
                                     None
                                 }
                             }
@@ -257,8 +289,18 @@ fn update_prompts_to_latest(checkpoints: &mut [Checkpoint]) -> Result<(), GitAiE
                                         model.unwrap_or_else(|| agent_id.model.clone()),
                                     ))
                                 }
-                                Err(_e) => {
-                                    // TODO Log error to sentry
+                                Err(e) => {
+                                    debug_log(&format!(
+                                        "Failed to parse Gemini JSON transcript from {} for agent_id {}: {}",
+                                        transcript_path, agent_id.id, e
+                                    ));
+                                    log_error(
+                                        &e,
+                                        Some(serde_json::json!({
+                                            "agent_tool": "gemini",
+                                            "operation": "transcript_and_model_from_gemini_json"
+                                        })),
+                                    );
                                     None
                                 }
                             }
@@ -284,8 +326,18 @@ fn update_prompts_to_latest(checkpoints: &mut [Checkpoint]) -> Result<(), GitAiE
                                     // IMPORTANT: Always preserve the original model from agent_id (don't overwrite)
                                     Some((transcript, agent_id.model.clone()))
                                 }
-                                Err(_e) => {
-                                    // TODO Log error to sentry
+                                Err(e) => {
+                                    debug_log(&format!(
+                                        "Failed to parse Continue CLI JSON transcript from {} for agent_id {}: {}",
+                                        transcript_path, agent_id.id, e
+                                    ));
+                                    log_error(
+                                        &e,
+                                        Some(serde_json::json!({
+                                            "agent_tool": "continue-cli",
+                                            "operation": "transcript_from_continue_json"
+                                        })),
+                                    );
                                     None
                                 }
                             }

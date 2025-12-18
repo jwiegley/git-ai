@@ -4,6 +4,7 @@ use crate::{
         working_log::{AgentId, CheckpointKind},
     },
     error::GitAiError,
+    observability::log_error,
 };
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
@@ -80,7 +81,13 @@ impl AgentCheckpointPreset for ClaudePreset {
                 Ok((transcript, model)) => (transcript, model),
                 Err(e) => {
                     eprintln!("[Warning] Failed to parse Claude JSONL: {e}");
-                    // TODO Log error to sentry
+                    log_error(
+                        &e,
+                        Some(serde_json::json!({
+                            "agent_tool": "claude",
+                            "operation": "transcript_and_model_from_claude_code_jsonl"
+                        })),
+                    );
                     (
                         crate::authorship::transcript::AiTranscript::new(),
                         Some("unknown".to_string()),
@@ -274,7 +281,13 @@ impl AgentCheckpointPreset for GeminiPreset {
                 Ok((transcript, model)) => (transcript, model),
                 Err(e) => {
                     eprintln!("[Warning] Failed to parse Gemini JSON: {e}");
-                    // TODO Log error to sentry
+                    log_error(
+                        &e,
+                        Some(serde_json::json!({
+                            "agent_tool": "gemini",
+                            "operation": "transcript_and_model_from_gemini_json"
+                        })),
+                    );
                     (
                         crate::authorship::transcript::AiTranscript::new(),
                         Some("unknown".to_string()),
@@ -480,7 +493,13 @@ impl AgentCheckpointPreset for ContinueCliPreset {
             Ok(transcript) => transcript,
             Err(e) => {
                 eprintln!("[Warning] Failed to parse Continue CLI JSON: {e}");
-                // TODO Log error to sentry
+                log_error(
+                    &e,
+                    Some(serde_json::json!({
+                        "agent_tool": "continue-cli",
+                        "operation": "transcript_from_continue_json"
+                    })),
+                );
                 crate::authorship::transcript::AiTranscript::new()
             }
         };
@@ -1178,11 +1197,18 @@ impl AgentCheckpointPreset for GithubCopilotPreset {
             GithubCopilotPreset::transcript_and_model_from_copilot_session_json(chat_session_path)
                 .map(|(t, m, f)| (Some(t), m, f))
                 .unwrap_or_else(|e| {
-                    // TODO Log error to sentry (JSON exists but invalid)
                     eprintln!(
                         "[Warning] Failed to parse GitHub Copilot chat session JSON from {} (will update transcript at commit): {}",
                         chat_session_path,
                         e
+                    );
+                    log_error(
+                        &e,
+                        Some(serde_json::json!({
+                            "agent_tool": "github-copilot",
+                            "operation": "transcript_and_model_from_copilot_session_json",
+                            "note": "JSON exists but invalid"
+                        })),
                     );
                     (None, None, None)
                 });
