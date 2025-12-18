@@ -85,12 +85,14 @@ A PR Bot aggregates `git-ai` data at the PR, Repository and Organization levels:
 | Atlassian RovoDev CLI                                                                      | ✅         | ✅      |
 | AWS Kiro (in-progress)                                                                     | 🔄         | 🔄      |
 | Continue VS Code/IntelliJ (in-progress)                                                    | 🔄         | 🔄      |
+| Windsurf                                                                                   | 🔄         | 🔄      |
+| Augment Code                                                                               | 🔄         | 🔄      |
 | OpenAI Codex (waiting on [openai/codex #2109](https://github.com/openai/codex/issues/2109)) |            |         |
 | Junie &amp; Jetbrains IDEs                                                                 |            |         |
 | Ona                                                                                        |            |         |
 | Sourcegraph Cody + Amp                                                                     |            |         |
 | Google Antigravity                                                                         |            |         |
-| Windsurf                                                                                   |            |         |
+
 | _your agent here_                                                                          |            |         |
 
 > **Building a Coding Agent?** [Add support for Git AI by following this guide](https://usegitai.com/docs/add-your-agent)
