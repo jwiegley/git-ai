@@ -51,6 +51,81 @@ impl TestRepo {
         repo
     }
 
+    /// Create a pair of test repos: a local mirror and its upstream remote.
+    /// The mirror is cloned from the upstream, so "origin" is automatically configured.
+    /// Returns (mirror, upstream) tuple.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let (mirror, upstream) = TestRepo::new_with_remote();
+    ///
+    /// // Make changes in mirror
+    /// mirror.filename("test.txt").write("hello").stage();
+    /// mirror.commit("initial commit");
+    ///
+    /// // Push to upstream
+    /// mirror.git(&["push", "origin", "main"]);
+    /// ```
+    pub fn new_with_remote() -> (Self, Self) {
+        let mut rng = rand::thread_rng();
+        let base = std::env::temp_dir();
+
+        // Create bare upstream repository (acts as the remote server)
+        let upstream_n: u64 = rng.gen_range(0..10000000000);
+        let upstream_path = base.join(upstream_n.to_string());
+        Repository::init_bare(&upstream_path).expect("failed to init bare upstream repository");
+
+        let upstream = Self {
+            path: upstream_path.clone(),
+            feature_flags: FeatureFlags::default(),
+            config_patch: None,
+        };
+
+        // Clone upstream to create mirror with origin configured
+        let mirror_n: u64 = rng.gen_range(0..10000000000);
+        let mirror_path = base.join(mirror_n.to_string());
+
+        let clone_output = Command::new("git")
+            .args([
+                "clone",
+                upstream_path.to_str().unwrap(),
+                mirror_path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to clone upstream repository");
+
+        if !clone_output.status.success() {
+            panic!(
+                "Failed to clone upstream repository:\nstderr: {}",
+                String::from_utf8_lossy(&clone_output.stderr)
+            );
+        }
+
+        // Configure mirror with user credentials
+        let mirror_repo =
+            Repository::open(&mirror_path).expect("failed to open cloned mirror repository");
+        let mut config =
+            Repository::config(&mirror_repo).expect("failed to get mirror repository config");
+        config
+            .set_str("user.name", "Test User")
+            .expect("failed to set user.name in mirror");
+        config
+            .set_str("user.email", "test@example.com")
+            .expect("failed to set user.email in mirror");
+
+        let mut mirror = Self {
+            path: mirror_path,
+            feature_flags: FeatureFlags::default(),
+            config_patch: None,
+        };
+
+        mirror.patch_git_ai_config(|patch| {
+            patch.share_prompts_in_repositories = Some(vec!["*".to_string()]);
+        });
+
+        (mirror, upstream)
+    }
+
     pub fn new_at_path(path: &PathBuf) -> Self {
         let repo = Repository::init(path).expect("failed to initialize git2 repository");
         let mut config = Repository::config(&repo).expect("failed to initialize git2 repository");
