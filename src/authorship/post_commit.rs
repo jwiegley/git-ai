@@ -1,5 +1,5 @@
-use crate::authorship::authorship_log::PromptRecord;
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
+use crate::authorship::secrets::{redact_secrets_from_prompts, strip_prompt_messages};
 use crate::authorship::stats::{stats_for_commit_stats, write_stats_to_terminal};
 use crate::authorship::virtual_attribution::VirtualAttributions;
 use crate::authorship::working_log::Checkpoint;
@@ -74,13 +74,14 @@ pub fn post_commit(
 
     authorship_log.metadata.base_commit_sha = commit_sha.clone();
 
-    // Strip prompt messages if prompts should not be shared for this repository
+    // Strip prompt messages if prompts should not be shared, otherwise redact secrets
     if !Config::get().should_share_prompts(&Some(repo.clone())) {
-        debug_log(&format!(
-            "Stripping prompt messages for repository: {:?}",
-            repo.path()
-        ));
         strip_prompt_messages(&mut authorship_log.metadata.prompts);
+    } else {
+        let count = redact_secrets_from_prompts(&mut authorship_log.metadata.prompts);
+        if count > 0 {
+            debug_log(&format!("Redacted {} secrets from prompts", count));
+        }
     }
 
     // Serialize the authorship log
@@ -372,14 +373,6 @@ fn update_prompts_to_latest(checkpoints: &mut [Checkpoint]) -> Result<(), GitAiE
     }
 
     Ok(())
-}
-
-/// Strip messages from prompts when sharing is not enabled for this repository.
-/// This is called only in post_commit when writing prompts to git history.
-fn strip_prompt_messages(prompts: &mut std::collections::BTreeMap<String, PromptRecord>) {
-    for record in prompts.values_mut() {
-        record.messages.clear();
-    }
 }
 
 #[cfg(test)]
