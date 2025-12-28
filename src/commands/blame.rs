@@ -448,7 +448,6 @@ impl Repository {
             args.push("-".to_string());
         }
 
-        // Separator then file path
         args.push("--".to_string());
         args.push(file_path.to_string());
 

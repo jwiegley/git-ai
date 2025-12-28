@@ -25,6 +25,7 @@ export interface PromptRecord {
   accepted_lines?: number;
   overriden_lines?: number;
   other_files?: string[];
+  commits?: string[];
 }
 
 export interface LineBlameInfo {

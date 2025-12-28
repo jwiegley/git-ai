@@ -33,6 +33,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable tracking for AI tab completion detection (experimental)."
+        },
+        "gitai.showPromptsOnSelect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show AI authorship information when selecting code."
         }
       }
     },
@@ -41,6 +46,11 @@
         "command": "git-ai.showModelHover",
         "title": "Show AI Model Information",
         "category": "git-ai"
+      },
+      {
+        "command": "git-ai.toggleAICode",
+        "title": "Toggle AI Code",
+        "category": "Git AI"
       }
     ]
   },
