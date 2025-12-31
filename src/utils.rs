@@ -1,5 +1,6 @@
 use crate::error::GitAiError;
 use crate::git::diff_tree_to_tree::Diff;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 /// Check if debug logging is enabled via environment variable
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 /// This is checked once at module initialization to avoid repeated environment variable lookups.
 static DEBUG_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 static DEBUG_PERFORMANCE_LEVEL: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+static IS_TERMINAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn is_debug_enabled() -> bool {
     *DEBUG_ENABLED.get_or_init(|| {
@@ -122,4 +124,8 @@ pub fn current_git_ai_exe() -> Result<PathBuf, GitAiError> {
     }
 
     Ok(path)
+}
+
+pub fn is_interactive_terminal() -> bool {
+    *IS_TERMINAL.get_or_init(|| std::io::stdin().is_terminal())
 }

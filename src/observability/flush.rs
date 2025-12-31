@@ -110,9 +110,13 @@ pub fn handle_flush_logs(args: &[String]) {
     let (oss_client, enterprise_client) = initialize_sentry_clients(oss_dsn, enterprise_dsn);
 
     // Initialize PostHog client
-    let posthog_client = posthog_api_key
-        .as_ref()
-        .map(|api_key| PostHogClient::new(api_key.clone(), posthog_host.clone()));
+    let posthog_client = if config.is_telemetry_oss_disabled() {
+        None
+    } else {
+        posthog_api_key
+            .as_ref()
+            .map(|api_key| PostHogClient::new(api_key.clone(), posthog_host.clone()))
+    };
 
     // Check if clients are present (needed for cleanup logic later)
     let has_clients =
@@ -594,7 +598,7 @@ fn send_envelope_to_posthog(
 
     let mut event = json!({
         "api_key": client.api_key,
-        "event": "log_message",
+        "event": message,
         "properties": properties,
         "distinct_id": distinct_id,
     });

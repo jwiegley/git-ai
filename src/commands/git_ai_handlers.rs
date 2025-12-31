@@ -15,6 +15,7 @@ use crate::git::find_repository_in_path;
 use crate::git::repository::CommitRange;
 use crate::observability::wrapper_performance_targets::log_performance_for_checkpoint;
 use crate::observability::{self, log_message};
+use crate::utils::is_interactive_terminal;
 use std::env;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -52,8 +53,14 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "config" => {
             commands::config::handle_config(&args[1..]);
+            if is_interactive_terminal() {
+                log_message("config", "info", None)
+            }
         }
         "stats" => {
+            if is_interactive_terminal() {
+                log_message("stats", "info", None)
+            }
             handle_stats(&args[1..]);
         }
         "show" => {
@@ -70,21 +77,32 @@ pub fn handle_git_ai(args: &[String]) {
         }
         "blame" => {
             handle_ai_blame(&args[1..]);
+            if is_interactive_terminal() {
+                log_message("blame", "info", None)
+            }
         }
         "diff" => {
             handle_ai_diff(&args[1..]);
+            if is_interactive_terminal() {
+                log_message("diff", "info", None)
+            }
         }
         "git-path" => {
             let config = config::Config::get();
             println!("{}", config.git_cmd());
             std::process::exit(0);
         }
-        "install-hooks" => {
-            if let Err(e) = commands::install_hooks::run(&args[1..]) {
+        "install-hooks" => match commands::install_hooks::run(&args[1..]) {
+            Ok(statuses) => {
+                if let Ok(statuses_value) = serde_json::to_value(&statuses) {
+                    log_message("install-hooks", "info", Some(statuses_value));
+                }
+            }
+            Err(e) => {
                 eprintln!("Install hooks failed: {}", e);
                 std::process::exit(1);
             }
-        }
+        },
         "squash-authorship" => {
             commands::squash_authorship::handle_squash_authorship(&args[1..]);
         }
@@ -95,6 +113,7 @@ pub fn handle_git_ai(args: &[String]) {
             commands::upgrade::run_with_args(&args[1..]);
         }
         "flush-logs" => {
+            log_message("flush_logs", "info", None);
             commands::flush_logs::handle_flush_logs(&args[1..]);
         }
         "show-prompt" => {

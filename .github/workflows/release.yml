@@ -66,6 +66,7 @@ jobs:
             -w /workspace \
             -e DEBIAN_FRONTEND=noninteractive \
             -e SENTRY_OSS="${{ secrets.SENTRY_OSS }}" \
+            -e POSTHOG_API_KEY="${{ secrets.POSTHOG_API_KEY }}" \
             -e OSS_BUILD="1" \
             ${{ matrix.docker_image }} \
             bash -c "
@@ -103,6 +104,7 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0
           SENTRY_OSS: ${{ secrets.SENTRY_OSS }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           OSS_BUILD: "1"
 
       - name: Verify binary architecture (Linux)
@@ -199,6 +201,7 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0
           SENTRY_OSS: ${{ secrets.SENTRY_OSS }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           OSS_BUILD: "1"
 
       - name: Verify binary architecture

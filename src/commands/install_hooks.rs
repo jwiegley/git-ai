@@ -5,10 +5,41 @@ use indicatif::{ProgressBar, ProgressStyle};
 use jsonc_parser::ParseOptions;
 use jsonc_parser::cst::CstRootNode;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Installation status for a tool
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallStatus {
+    /// Tool was not detected or failed to install
+    NotFound,
+    /// Hooks/extensions were successfully installed or updated
+    Installed,
+    /// Hooks/extensions were already up to date
+    AlreadyInstalled,
+}
+
+impl InstallStatus {
+    /// Convert status to string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            InstallStatus::NotFound => "not-found",
+            InstallStatus::Installed => "installed",
+            InstallStatus::AlreadyInstalled => "already-installed",
+        }
+    }
+}
+
+/// Convert a HashMap of tool statuses to string keys and values
+pub fn to_hashmap(statuses: HashMap<String, InstallStatus>) -> HashMap<String, String> {
+    statuses
+        .into_iter()
+        .map(|(k, v)| (k, v.as_str().to_string()))
+        .collect()
+}
 
 // Minimum version requirements
 const MIN_CURSOR_VERSION: (u32, u32) = (1, 7);
@@ -34,7 +65,7 @@ const OPENCODE_PLUGIN_CONTENT: &str = include_str!(concat!(
     "/agent-support/opencode/git-ai.ts"
 ));
 
-pub fn run(args: &[String]) -> Result<(), GitAiError> {
+pub fn run(args: &[String]) -> Result<HashMap<String, String>, GitAiError> {
     // Parse --dry-run flag (default: false)
     let mut dry_run = false;
     for arg in args {
@@ -46,13 +77,18 @@ pub fn run(args: &[String]) -> Result<(), GitAiError> {
     // Get absolute path to the current binary
     let binary_path = get_current_binary_path()?;
 
-    // Run async operations with smol
-    smol::block_on(async_run(binary_path, dry_run))
+    // Run async operations with smol and convert result
+    let statuses = smol::block_on(async_run(binary_path, dry_run))?;
+    Ok(to_hashmap(statuses))
 }
 
-async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError> {
+async fn async_run(
+    binary_path: PathBuf,
+    dry_run: bool,
+) -> Result<HashMap<String, InstallStatus>, GitAiError> {
     let mut any_checked = false;
     let mut has_changes = false;
+    let mut statuses: HashMap<String, InstallStatus> = HashMap::new();
 
     match check_claude_code() {
         Ok(true) => {
@@ -71,19 +107,23 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     println!(); // Blank line before diff
                     print_diff(&diff);
                     has_changes = true;
+                    statuses.insert("claude-code".to_string(), InstallStatus::Installed);
                 }
                 Ok(None) => {
                     spinner.success("Claude code: Hooks already up to date");
+                    statuses.insert("claude-code".to_string(), InstallStatus::AlreadyInstalled);
                 }
                 Err(e) => {
                     spinner.error("Claude code: Failed to update hooks");
                     eprintln!("  Error: {}", e);
                     eprintln!("  Check that ~/.claude/settings.json is valid JSON");
+                    statuses.insert("claude-code".to_string(), InstallStatus::NotFound);
                 }
             }
         }
         Ok(false) => {
             // Claude Code not detected
+            statuses.insert("claude-code".to_string(), InstallStatus::NotFound);
         }
         Err(version_error) => {
             any_checked = true;
@@ -92,6 +132,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
             spinner.error("Claude code: Version check failed");
             eprintln!("  Error: {}", version_error);
             eprintln!("  Please update Claude Code to continue using git-ai hooks");
+            statuses.insert("claude-code".to_string(), InstallStatus::NotFound);
         }
     }
 
@@ -112,14 +153,17 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     println!(); // Blank line before diff
                     print_diff(&diff);
                     has_changes = true;
+                    statuses.insert("cursor".to_string(), InstallStatus::Installed);
                 }
                 Ok(None) => {
                     spinner.success("Cursor: Hooks already up to date");
+                    statuses.insert("cursor".to_string(), InstallStatus::AlreadyInstalled);
                 }
                 Err(e) => {
                     spinner.error("Cursor: Failed to update hooks");
                     eprintln!("  Error: {}", e);
                     eprintln!("  Check that ~/.cursor/hooks.json is valid JSON");
+                    statuses.insert("cursor".to_string(), InstallStatus::NotFound);
                 }
             }
 
@@ -192,6 +236,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
         }
         Ok(false) => {
             // Cursor not detected
+            statuses.insert("cursor".to_string(), InstallStatus::NotFound);
         }
         Err(version_error) => {
             any_checked = true;
@@ -200,6 +245,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
             spinner.error("Cursor: Version check failed");
             eprintln!("  Error: {}", version_error);
             eprintln!("  Please update Cursor to continue using git-ai hooks");
+            statuses.insert("cursor".to_string(), InstallStatus::NotFound);
         }
     }
 
@@ -215,14 +261,17 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                 match is_vsc_editor_extension_installed("code", "git-ai.git-ai-vscode") {
                     Ok(true) => {
                         spinner.success("VS Code: Extension installed");
+                        statuses.insert("vscode".to_string(), InstallStatus::AlreadyInstalled);
                     }
                     Ok(false) => {
                         if dry_run {
                             spinner.pending("VS Code: Pending extension install");
+                            statuses.insert("vscode".to_string(), InstallStatus::NotFound);
                         } else {
                             match install_vsc_editor_extension("code", "git-ai.git-ai-vscode") {
                                 Ok(()) => {
                                     spinner.success("VS Code: Extension installed");
+                                    statuses.insert("vscode".to_string(), InstallStatus::Installed);
                                 }
                                 Err(e) => {
                                     debug_log(&format!(
@@ -230,6 +279,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                                         e
                                     ));
                                     spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
+                                    statuses.insert("vscode".to_string(), InstallStatus::NotFound);
                                 }
                             }
                         }
@@ -237,10 +287,12 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     Err(e) => {
                         spinner.error("VS Code: Failed to check extension");
                         eprintln!("  Error: {}", e);
+                        statuses.insert("vscode".to_string(), InstallStatus::NotFound);
                     }
                 }
             } else {
                 spinner.pending("VS Code: Unable to automatically install extension. Please cmd+click on the following link to install: vscode:extension/git-ai.git-ai-vscode (or navigate to https://marketplace.visualstudio.com/items?itemName=git-ai.git-ai-vscode in your browser)");
+                statuses.insert("vscode".to_string(), InstallStatus::NotFound);
             }
 
             #[cfg(windows)]
@@ -275,6 +327,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
         }
         Ok(false) => {
             // VS Code not detected
+            statuses.insert("vscode".to_string(), InstallStatus::NotFound);
         }
         Err(version_error) => {
             any_checked = true;
@@ -283,6 +336,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
             spinner.error("VS Code: Version check failed");
             eprintln!("  Error: {}", version_error);
             eprintln!("  Please update VS Code to continue using git-ai hooks");
+            statuses.insert("vscode".to_string(), InstallStatus::NotFound);
         }
     }
 
@@ -303,19 +357,23 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     println!(); // Blank line before diff
                     print_diff(&diff);
                     has_changes = true;
+                    statuses.insert("opencode".to_string(), InstallStatus::Installed);
                 }
                 Ok(None) => {
                     spinner.success("OpenCode: Plugin already up to date");
+                    statuses.insert("opencode".to_string(), InstallStatus::AlreadyInstalled);
                 }
                 Err(e) => {
                     spinner.error("OpenCode: Failed to install plugin");
                     eprintln!("  Error: {}", e);
                     eprintln!("  Check that ~/.config/opencode/plugin/ is writable");
+                    statuses.insert("opencode".to_string(), InstallStatus::NotFound);
                 }
             }
         }
         Ok(false) => {
             // OpenCode not detected
+            statuses.insert("opencode".to_string(), InstallStatus::NotFound);
         }
         Err(version_error) => {
             any_checked = true;
@@ -323,6 +381,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
             spinner.start();
             spinner.error("OpenCode: Version check failed");
             eprintln!("  Error: {}", version_error);
+            statuses.insert("opencode".to_string(), InstallStatus::NotFound);
         }
     }
 
@@ -343,19 +402,23 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
                     println!(); // Blank line before diff
                     print_diff(&diff);
                     has_changes = true;
+                    statuses.insert("gemini".to_string(), InstallStatus::Installed);
                 }
                 Ok(None) => {
                     spinner.success("Gemini: Hooks already up to date");
+                    statuses.insert("gemini".to_string(), InstallStatus::AlreadyInstalled);
                 }
                 Err(e) => {
                     spinner.error("Gemini: Failed to update hooks");
                     eprintln!("  Error: {}", e);
                     eprintln!("  Check that ~/.gemini/settings.json is valid JSON");
+                    statuses.insert("gemini".to_string(), InstallStatus::NotFound);
                 }
             }
         }
         Ok(false) => {
             // Gemini not detected
+            statuses.insert("gemini".to_string(), InstallStatus::NotFound);
         }
         Err(version_error) => {
             any_checked = true;
@@ -363,6 +426,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
             spinner.start();
             spinner.error("Gemini: Version check failed");
             eprintln!("  Error: {}", version_error);
+            statuses.insert("gemini".to_string(), InstallStatus::NotFound);
         }
     }
 
@@ -374,7 +438,7 @@ async fn async_run(binary_path: PathBuf, dry_run: bool) -> Result<(), GitAiError
         println!("\x1b[1m  git-ai install-hooks --dry-run=false\x1b[0m");
     }
 
-    Ok(())
+    Ok(statuses)
 }
 
 fn print_diff(diff_text: &str) {
