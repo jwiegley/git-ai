@@ -90,8 +90,8 @@ git-ai config set --add share_prompts_in_repositories /path/to/repo
 
 | Agent/IDE                                                                                  | Authorship | Prompts |
 | ------------------------------------------------------------------------------------------ | ---------- | ------- |
-| Cursor &gt;1.7
-| Claude Code
+| Cursor &gt;1.7                                                                             | ✅         | ✅      |
+| Claude Code                                                                                | ✅         | ✅      |
 | GitHub Copilot in VSCode via Extension                                                     | ✅         | ✅      |
 | Google Gemini CLI                                                                          | ✅         | ✅      |
 | Continue CLI                                                                               | ✅         | ✅      |
