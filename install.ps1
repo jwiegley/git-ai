@@ -48,8 +48,58 @@ function Wait-ForFileAvailable {
     return $false
 }
 
+function Verify-Checksum {
+    param(
+        [Parameter(Mandatory = $true)][string]$File,
+        [Parameter(Mandatory = $true)][string]$BinaryName
+    )
+
+    # Skip verification if no checksums are embedded
+    if ($EmbeddedChecksums -eq '__CHECKSUMS_PLACEHOLDER__') {
+        return
+    }
+
+    # Extract expected checksum for this binary
+    $expected = $null
+    $entries = $EmbeddedChecksums -split '\|'
+    foreach ($entry in $entries) {
+        if ($entry -match "^([0-9a-fA-F]+)\s+$([regex]::Escape($BinaryName))$") {
+            $expected = $Matches[1]
+            break
+        }
+    }
+
+    if (-not $expected) {
+        Write-ErrorAndExit "No checksum found for $BinaryName"
+    }
+
+    # Calculate actual checksum
+    $actual = (Get-FileHash -Path $File -Algorithm SHA256).Hash.ToLower()
+
+    if ($expected -ne $actual) {
+        Remove-Item -Force -ErrorAction SilentlyContinue $File
+        Write-ErrorAndExit "Checksum verification failed for $BinaryName`nExpected: $expected`nActual:   $actual"
+    }
+
+    Write-Success "Checksum verified for $BinaryName"
+}
+
 # GitHub repository details
-$Repo = 'acunniffe/git-ai'
+# Replaced during release builds with the actual repository (e.g., "acunniffe/git-ai")
+# When set to __REPO_PLACEHOLDER__, defaults to "acunniffe/git-ai"
+$Repo = '__REPO_PLACEHOLDER__'
+if ($Repo -eq '__REPO_PLACEHOLDER__') {
+    $Repo = 'acunniffe/git-ai'
+}
+
+# Version placeholder - replaced during release builds with actual version (e.g., "v1.0.24")
+# When set to __VERSION_PLACEHOLDER__, defaults to "latest"
+$PinnedVersion = '__VERSION_PLACEHOLDER__'
+
+# Embedded checksums - replaced during release builds with actual SHA256 checksums
+# Format: "hash  filename|hash  filename|..." (pipe-separated)
+# When set to __CHECKSUMS_PLACEHOLDER__, checksum verification is skipped
+$EmbeddedChecksums = '__CHECKSUMS_PLACEHOLDER__'
 
 # Ensure TLS 1.2 for GitHub downloads on older PowerShell versions
 try {
@@ -220,17 +270,24 @@ $os = 'windows'
 
 # Determine binary name and download URLs
 $binaryName = "git-ai-$os-$arch"
-$releaseTag = $env:GIT_AI_RELEASE_TAG
-if ([string]::IsNullOrWhiteSpace($releaseTag)) {
-    $releaseTag = 'latest'
-}
 
-if ($releaseTag -eq 'latest') {
-    $downloadUrlExe = "https://github.com/$Repo/releases/latest/download/$binaryName.exe"
-    $downloadUrlNoExt = "https://github.com/$Repo/releases/latest/download/$binaryName"
-} else {
+# Determine release tag
+# Priority: 1. Pinned version (for release builds), 2. Environment variable, 3. "latest"
+if ($PinnedVersion -ne '__VERSION_PLACEHOLDER__') {
+    # Version-pinned install script from a release
+    $releaseTag = $PinnedVersion
     $downloadUrlExe = "https://github.com/$Repo/releases/download/$releaseTag/$binaryName.exe"
     $downloadUrlNoExt = "https://github.com/$Repo/releases/download/$releaseTag/$binaryName"
+} elseif (-not [string]::IsNullOrWhiteSpace($env:GIT_AI_RELEASE_TAG) -and $env:GIT_AI_RELEASE_TAG -ne 'latest') {
+    # Environment variable override
+    $releaseTag = $env:GIT_AI_RELEASE_TAG
+    $downloadUrlExe = "https://github.com/$Repo/releases/download/$releaseTag/$binaryName.exe"
+    $downloadUrlNoExt = "https://github.com/$Repo/releases/download/$releaseTag/$binaryName"
+} else {
+    # Default to latest
+    $releaseTag = 'latest'
+    $downloadUrlExe = "https://github.com/$Repo/releases/latest/download/$binaryName.exe"
+    $downloadUrlNoExt = "https://github.com/$Repo/releases/latest/download/$binaryName"
 }
 
 # Install directory: %USERPROFILE%\.git-ai\bin
@@ -252,11 +309,15 @@ function Try-Download {
     }
 }
 
-$downloaded = $false
-if (Try-Download -Url $downloadUrlExe) { $downloaded = $true }
-elseif (Try-Download -Url $downloadUrlNoExt) { $downloaded = $true }
+# Track which download URL succeeded for checksum verification
+$downloadedBinaryName = $null
+if (Try-Download -Url $downloadUrlExe) {
+    $downloadedBinaryName = "$binaryName.exe"
+} elseif (Try-Download -Url $downloadUrlNoExt) {
+    $downloadedBinaryName = $binaryName
+}
 
-if (-not $downloaded) {
+if (-not $downloadedBinaryName) {
     Remove-Item -Force -ErrorAction SilentlyContinue $tmpFile
     Write-ErrorAndExit 'Failed to download binary (HTTP error)'
 }
@@ -270,6 +331,9 @@ try {
     Remove-Item -Force -ErrorAction SilentlyContinue $tmpFile
     Write-ErrorAndExit 'Download failed'
 }
+
+# Verify checksum if embedded (release builds only)
+Verify-Checksum -File $tmpFile -BinaryName $downloadedBinaryName
 
 $finalExe = Join-Path $installDir 'git-ai.exe'
 

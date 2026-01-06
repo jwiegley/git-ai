@@ -313,12 +313,37 @@ jobs:
           echo "Generated version-pinned install.sh for $VERSION from $REPO"
           echo "Embedded checksums: $CHECKSUMS"
 
+      - name: Generate version-pinned install.ps1 script
+        run: |
+          VERSION="${{ steps.release-meta.outputs.tag_name }}"
+          REPO="${{ github.repository }}"
+          # Reuse checksums from earlier step
+          CHECKSUMS=$(tr '\n' '|' < release/SHA256SUMS | sed 's/|$//')
+          if [ -z "$CHECKSUMS" ]; then
+            CHECKSUMS="__CHECKSUMS_PLACEHOLDER__"
+          fi
+          # Replace variable assignment lines to embed release-specific values
+          # Line 90: REPO, Line 97: PINNED_VERSION, Line 102: EMBEDDED_CHECKSUMS
+          awk -v repo="$REPO" -v version="$VERSION" -v checksums="$CHECKSUMS" '
+            NR==90 { sub(/__REPO_PLACEHOLDER__/, repo) }
+            NR==97 { sub(/__VERSION_PLACEHOLDER__/, version) }
+            NR==102 { sub(/__CHECKSUMS_PLACEHOLDER__/, checksums) }
+            { print }
+          ' repo/install.ps1 > release/install.ps1
+          echo "Generated version-pinned install.ps1 for $VERSION from $REPO"
+
+      - name: Add install scripts to SHA256SUMS
+        run: |
+          cd release
+          sha256sum install.sh install.ps1 >> SHA256SUMS
+
       - name: Generate attestations for release artifacts
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             release/git-ai-*
             release/install.sh
+            release/install.ps1
             release/SHA256SUMS
 
       - name: Create Release
@@ -334,8 +359,15 @@ jobs:
 
             ### Installation
             Install this specific version with checksum verification:
+
+            **macOS/Linux:**
             ```bash
             curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ steps.release-meta.outputs.tag_name }}/install.sh | bash
+            ```
+
+            **Windows (PowerShell):**
+            ```powershell
+            irm https://github.com/${{ github.repository }}/releases/download/${{ steps.release-meta.outputs.tag_name }}/install.ps1 | iex
             ```
 
             ### Downloads
@@ -359,6 +391,7 @@ jobs:
             release/git-ai-*
             release/SHA256SUMS
             release/install.sh
+            release/install.ps1
           draft: false
           prerelease: ${{ steps.release-meta.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.release-meta.outputs.make_latest }}
