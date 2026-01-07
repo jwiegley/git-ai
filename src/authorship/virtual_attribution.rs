@@ -1600,22 +1600,42 @@ fn file_exists_in_commit(
 mod tests {
 
     use super::*;
+    use crate::git::test_utils::TmpRepo;
 
     #[test]
     fn test_virtual_attributions() {
-        let repo = crate::git::find_repository_in_path(".").unwrap();
+        // Create a temporary repo with an initial commit
+        let repo = TmpRepo::new().unwrap();
 
+        // Write a test file with some content
+        let _file = repo
+            .write_file(
+                "test_file.rs",
+                "fn main() {\n    println!(\"Hello\");\n}\n",
+                true,
+            )
+            .unwrap();
+
+        // Trigger checkpoint and commit to create proper authorship data
+        repo.trigger_checkpoint_with_author("test_user").unwrap();
+        repo.commit_with_message("Initial commit").unwrap();
+
+        // Get the commit SHA
+        let commit_sha = repo.head_commit_sha().unwrap();
+
+        // Create VirtualAttributions using the temp repo
         let virtual_attributions = smol::block_on(async {
             VirtualAttributions::new_for_base_commit(
-                repo,
-                "5753483e6a8d0024dacfc6eaab8b8f5b2f2301c5".to_string(),
-                &["src/utils.rs".to_string()],
+                repo.gitai_repo().clone(),
+                commit_sha.clone(),
+                &["test_file.rs".to_string()],
                 None,
             )
             .await
         })
         .unwrap();
 
+        // Verify files were tracked
         println!(
             "virtual_attributions files: {:?}",
             virtual_attributions.files()
@@ -1623,35 +1643,13 @@ mod tests {
         println!("base_commit: {}", virtual_attributions.base_commit());
         println!("timestamp: {}", virtual_attributions.timestamp());
 
+        // Print attribution details if available (for debugging)
         if let Some((char_attrs, line_attrs)) =
-            virtual_attributions.get_attributions("src/utils.rs")
+            virtual_attributions.get_attributions("test_file.rs")
         {
-            println!("\n=== src/utils.rs Attribution Info ===");
+            println!("\n=== test_file.rs Attribution Info ===");
             println!("Character-level attributions: {} ranges", char_attrs.len());
-            for (i, attr) in char_attrs.iter().enumerate() {
-                println!(
-                    "  [{}] chars {}..{} (len={}) -> author: '{}', ts: {}",
-                    i,
-                    attr.start,
-                    attr.end,
-                    attr.end - attr.start,
-                    attr.author_id,
-                    attr.ts
-                );
-            }
-
-            println!("\nLine-level attributions: {} ranges", line_attrs.len());
-            for (i, attr) in line_attrs.iter().enumerate() {
-                println!(
-                    "  [{}] lines {}..{} (count={}) -> author: '{}', overrode: {}",
-                    i,
-                    attr.start_line,
-                    attr.end_line,
-                    attr.line_count(),
-                    attr.author_id,
-                    format!("{:?}", attr.overrode)
-                );
-            }
+            println!("Line-level attributions: {} ranges", line_attrs.len());
         }
 
         assert!(!virtual_attributions.files().is_empty());
