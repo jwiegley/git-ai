@@ -106,6 +106,7 @@ fn print_config_help() {
     eprintln!("  update_channel               Update channel (latest/next)");
     eprintln!("  feature_flags                Feature flags (object)");
     eprintln!("  api_key                      API key for X-API-Key header");
+    eprintln!("  prompt_storage               Prompt storage mode (default/notes/local)");
     eprintln!("");
     eprintln!("Repository Patterns:");
     eprintln!("  For exclude/allow/exclude_prompts_in_repositories, you can provide:");
@@ -277,6 +278,11 @@ fn show_all_config() -> Result<(), String> {
         Value::String(runtime_config.update_channel().as_str().to_string()),
     );
 
+    effective_config.insert(
+        "prompt_storage".to_string(),
+        Value::String(runtime_config.prompt_storage().to_string()),
+    );
+
     // Feature flags - show effective flags with defaults applied
     let flags_value = serde_json::to_value(runtime_config.get_feature_flags())
         .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
@@ -349,6 +355,7 @@ fn get_config_value(key: &str) -> Result<(), String> {
                     Value::Null
                 }
             }
+            "prompt_storage" => Value::String(runtime_config.prompt_storage().to_string()),
             _ => return Err(format!("Unknown config key: {}", key)),
         };
 
@@ -471,6 +478,12 @@ fn set_config_value(key: &str, value: &str, add_mode: bool) -> Result<(), String
                 crate::config::save_file_config(&file_config)?;
                 let masked = mask_api_key(value);
                 eprintln!("[api_key]: {}", masked);
+            }
+            "prompt_storage" => {
+                validate_prompt_storage_value(value)?;
+                file_config.prompt_storage = Some(value.to_string());
+                crate::config::save_file_config(&file_config)?;
+                eprintln!("[prompt_storage]: {}", value);
             }
             _ => return Err(format!("Unknown config key: {}", key)),
         }
@@ -613,6 +626,13 @@ fn unset_config_value(key: &str) -> Result<(), String> {
                 crate::config::save_file_config(&file_config)?;
                 if old_value.is_some() {
                     eprintln!("- [api_key]: ****");
+                }
+            }
+            "prompt_storage" => {
+                let old_value = file_config.prompt_storage.take();
+                crate::config::save_file_config(&file_config)?;
+                if let Some(v) = old_value {
+                    eprintln!("- [prompt_storage]: {}", v);
                 }
             }
             _ => return Err(format!("Unknown config key: {}", key)),
@@ -797,5 +817,48 @@ fn mask_api_key(key: &str) -> String {
         format!("{}...{}", &key[..4], &key[key.len() - 4..])
     } else {
         "****".to_string()
+    }
+}
+
+/// Validate prompt_storage value
+fn validate_prompt_storage_value(value: &str) -> Result<(), String> {
+    if value != "default" && value != "notes" && value != "local" {
+        return Err(format!(
+            "Invalid prompt_storage value '{}'. Expected 'default', 'notes', or 'local'",
+            value
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prompt_storage_valid_values() {
+        for value in ["default", "notes", "local"] {
+            let result = validate_prompt_storage_value(value);
+            assert!(result.is_ok(), "Expected '{}' to be valid", value);
+        }
+    }
+
+    #[test]
+    fn test_prompt_storage_invalid_value() {
+        for value in ["invalid", "defaults", "note", "", "DEFAULT", "NOTES"] {
+            let result = validate_prompt_storage_value(value);
+            assert!(result.is_err(), "Expected '{}' to be invalid", value);
+        }
+    }
+
+    #[test]
+    fn test_prompt_storage_invalid_value_error_message() {
+        let result = validate_prompt_storage_value("invalid");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("invalid"));
+        assert!(err.contains("default"));
+        assert!(err.contains("notes"));
+        assert!(err.contains("local"));
     }
 }
