@@ -171,8 +171,13 @@ async fn async_run(
             let extension_spinner = Spinner::new("Cursor: installing extension");
             extension_spinner.start();
 
-            if binary_exists("cursor") {
-                // Install/update Cursor extension
+            // First check the extensions directory directly
+            let cursor_extensions_dir = home_dir().join(".cursor").join("extensions");
+
+            if is_extension_installed_in_dir(&cursor_extensions_dir, "git-ai.git-ai-vscode") {
+                extension_spinner.success("Cursor: Extension installed");
+            } else if binary_exists("cursor") {
+                // Extension not found in directory, try using CLI to install
                 match is_vsc_editor_extension_installed("cursor", "git-ai.git-ai-vscode") {
                     Ok(true) => {
                         extension_spinner.success("Cursor: Extension installed");
@@ -256,8 +261,14 @@ async fn async_run(
             let spinner = Spinner::new("VS Code: installing extension");
             spinner.start();
 
-            if binary_exists("code") {
-                // Install/update VS Code extension
+            // First check the extensions directory directly
+            let vscode_extensions_dir = home_dir().join(".vscode").join("extensions");
+
+            if is_extension_installed_in_dir(&vscode_extensions_dir, "git-ai.git-ai-vscode") {
+                spinner.success("VS Code: Extension installed");
+                statuses.insert("vscode".to_string(), InstallStatus::AlreadyInstalled);
+            } else if binary_exists("code") {
+                // Extension not found in directory, try using CLI to install
                 match is_vsc_editor_extension_installed("code", "git-ai.git-ai-vscode") {
                     Ok(true) => {
                         spinner.success("VS Code: Extension installed");
@@ -658,6 +669,25 @@ fn version_meets_requirement(version: (u32, u32), min_version: (u32, u32)) -> bo
     }
     if version.0 == min_version.0 && version.1 >= min_version.1 {
         return true;
+    }
+    false
+}
+
+/// Check if an extension is installed by looking at the extensions directory
+/// Returns true if a directory starting with the extension_id exists
+fn is_extension_installed_in_dir(extensions_dir: &Path, extension_id: &str) -> bool {
+    if !extensions_dir.exists() {
+        return false;
+    }
+
+    if let Ok(entries) = fs::read_dir(extensions_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_name) = entry.file_name().into_string() {
+                if file_name.starts_with(extension_id) {
+                    return true;
+                }
+            }
+        }
     }
     false
 }
