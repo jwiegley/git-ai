@@ -210,6 +210,32 @@
         with lib;
         let
           cfg = config.programs.git-ai;
+          jsonFormat = pkgs.formats.json { };
+
+          # Build the config object, filtering out null values
+          configFile = filterAttrs (n: v: v != null) {
+            git_path =
+              if cfg.settings.gitPath != null
+              then cfg.settings.gitPath
+              else "${pkgs.git}/bin/git";
+            prompt_storage = cfg.settings.promptStorage;
+            api_base_url = cfg.settings.apiBaseUrl;
+            exclude_prompts_in_repositories = cfg.settings.excludePromptsInRepositories;
+            allow_repositories = cfg.settings.allowRepositories;
+            exclude_repositories = cfg.settings.excludeRepositories;
+            telemetry_oss = cfg.settings.telemetryOss;
+            telemetry_enterprise_dsn = cfg.settings.telemetryEnterpriseDsn;
+            disable_version_checks = cfg.settings.disableVersionChecks;
+            disable_auto_updates = cfg.settings.disableAutoUpdates;
+            update_channel = cfg.settings.updateChannel;
+            feature_flags =
+              if cfg.settings.featureFlags != { }
+              then cfg.settings.featureFlags
+              else null;
+          };
+
+          # Generate the config file in the Nix store
+          configJsonFile = jsonFormat.generate "git-ai-config.json" configFile;
         in
         {
           options.programs.git-ai = {
@@ -219,7 +245,7 @@
               type = types.package;
               default = self.packages.${pkgs.system}.default;
               defaultText = literalExpression "inputs.git-ai.packages.\${pkgs.system}.default";
-              description = "The git-ai package to use";
+              description = "The git-ai package to use.";
             };
 
             installHooks = mkOption {
@@ -240,6 +266,117 @@
                 The original git is still accessible via 'git-og'.
               '';
             };
+
+            settings = {
+              gitPath = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = ''
+                  Path to the git binary. If not specified, defaults to the
+                  git package from nixpkgs.
+                '';
+              };
+
+              promptStorage = mkOption {
+                type = types.nullOr (types.enum [ "default" "notes" "local" ]);
+                default = null;
+                description = ''
+                  Prompt storage mode:
+                  - "default": Messages uploaded via CAS API
+                  - "notes": Messages stored in git notes
+                  - "local": Messages only stored in sqlite (not in notes, not uploaded)
+                '';
+              };
+
+              apiBaseUrl = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = ''
+                  API base URL for git-ai services.
+                  Defaults to "https://usegitai.com" if not specified.
+                '';
+              };
+
+              excludePromptsInRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/private/*" "*" ];
+                description = ''
+                  List of repository URL patterns (globs) to exclude from prompt sharing.
+                  Use "*" to exclude all repositories.
+                '';
+              };
+
+              allowRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/myorg/*" ];
+                description = ''
+                  List of repository URL patterns (globs) to allow.
+                  If empty or null, all repositories are allowed (unless excluded).
+                '';
+              };
+
+              excludeRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/private/*" ];
+                description = ''
+                  List of repository URL patterns (globs) to exclude from git-ai tracking.
+                  Exclusions take precedence over allow list.
+                '';
+              };
+
+              telemetryOss = mkOption {
+                type = types.nullOr (types.enum [ "on" "off" ]);
+                default = null;
+                description = ''
+                  OSS telemetry setting. Set to "off" to disable telemetry.
+                '';
+              };
+
+              telemetryEnterpriseDsn = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = ''
+                  Enterprise telemetry DSN for custom telemetry endpoints.
+                '';
+              };
+
+              disableVersionChecks = mkOption {
+                type = types.nullOr types.bool;
+                default = null;
+                description = ''
+                  Whether to disable version checks.
+                '';
+              };
+
+              disableAutoUpdates = mkOption {
+                type = types.nullOr types.bool;
+                default = null;
+                description = ''
+                  Whether to disable automatic updates.
+                '';
+              };
+
+              updateChannel = mkOption {
+                type = types.nullOr (types.enum [ "latest" "next" ]);
+                default = null;
+                description = ''
+                  Update channel: "latest" for stable releases, "next" for pre-releases.
+                '';
+              };
+
+              featureFlags = mkOption {
+                type = jsonFormat.type;
+                default = { };
+                example = { rewrite_stash = true; };
+                description = ''
+                  Feature flags as a JSON-compatible attribute set.
+                  See git-ai documentation for available flags.
+                '';
+              };
+            };
           };
 
           config = mkIf cfg.enable {
@@ -257,14 +394,12 @@
                     # Create config directory
                     mkdir -p "$user_home/.git-ai"
 
-                    # Create config.json if it doesn't exist
-                    if [ ! -f "$user_home/.git-ai/config.json" ]; then
-                      cat > "$user_home/.git-ai/config.json" <<EOF
-                {
-                  "git_path": "${pkgs.git}/bin/git"
-                }
-                EOF
-                      chown -R "$user" "$user_home/.git-ai" 2>/dev/null || true
+                    # Copy config.json from store (allows user to override later if needed)
+                    # Only copy if the file doesn't exist or is a symlink (from previous Nix activation)
+                    if [ ! -f "$user_home/.git-ai/config.json" ] || [ -L "$user_home/.git-ai/config.json" ]; then
+                      cp -f ${configJsonFile} "$user_home/.git-ai/config.json"
+                      chmod 644 "$user_home/.git-ai/config.json"
+                      chown "$user" "$user_home/.git-ai/config.json" 2>/dev/null || true
                     fi
 
                     # Install hooks (run as user if possible)
@@ -285,6 +420,30 @@
         with lib;
         let
           cfg = config.programs.git-ai;
+          jsonFormat = pkgs.formats.json { };
+
+          # Build the config object, filtering out null values
+          # We use explicit null checks since Nix 'or' only works for attribute access
+          configFile = filterAttrs (n: v: v != null) {
+            git_path =
+              if cfg.settings.gitPath != null
+              then cfg.settings.gitPath
+              else "${pkgs.git}/bin/git";
+            prompt_storage = cfg.settings.promptStorage;
+            api_base_url = cfg.settings.apiBaseUrl;
+            exclude_prompts_in_repositories = cfg.settings.excludePromptsInRepositories;
+            allow_repositories = cfg.settings.allowRepositories;
+            exclude_repositories = cfg.settings.excludeRepositories;
+            telemetry_oss = cfg.settings.telemetryOss;
+            telemetry_enterprise_dsn = cfg.settings.telemetryEnterpriseDsn;
+            disable_version_checks = cfg.settings.disableVersionChecks;
+            disable_auto_updates = cfg.settings.disableAutoUpdates;
+            update_channel = cfg.settings.updateChannel;
+            feature_flags =
+              if cfg.settings.featureFlags != { }
+              then cfg.settings.featureFlags
+              else null;
+          };
         in
         {
           options.programs.git-ai = {
@@ -294,7 +453,7 @@
               type = types.package;
               default = self.packages.${pkgs.system}.default;
               defaultText = literalExpression "inputs.git-ai.packages.\${pkgs.system}.default";
-              description = "The git-ai package to use";
+              description = "The git-ai package to use.";
             };
 
             installHooks = mkOption {
@@ -306,21 +465,125 @@
               '';
             };
 
-            createConfig = mkOption {
-              type = types.bool;
-              default = true;
-              description = ''
-                Whether to create ~/.git-ai/config.json with git_path.
-              '';
+            settings = {
+              gitPath = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = ''
+                  Path to the git binary. If not specified, defaults to the
+                  git package from nixpkgs.
+                '';
+              };
+
+              promptStorage = mkOption {
+                type = types.nullOr (types.enum [ "default" "notes" "local" ]);
+                default = null;
+                description = ''
+                  Prompt storage mode:
+                  - "default": Messages uploaded via CAS API
+                  - "notes": Messages stored in git notes
+                  - "local": Messages only stored in sqlite (not in notes, not uploaded)
+                '';
+              };
+
+              apiBaseUrl = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = ''
+                  API base URL for git-ai services.
+                  Defaults to "https://usegitai.com" if not specified.
+                '';
+              };
+
+              excludePromptsInRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/private/*" "*" ];
+                description = ''
+                  List of repository URL patterns (globs) to exclude from prompt sharing.
+                  Use "*" to exclude all repositories.
+                '';
+              };
+
+              allowRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/myorg/*" ];
+                description = ''
+                  List of repository URL patterns (globs) to allow.
+                  If empty or null, all repositories are allowed (unless excluded).
+                '';
+              };
+
+              excludeRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/private/*" ];
+                description = ''
+                  List of repository URL patterns (globs) to exclude from git-ai tracking.
+                  Exclusions take precedence over allow list.
+                '';
+              };
+
+              telemetryOss = mkOption {
+                type = types.nullOr (types.enum [ "on" "off" ]);
+                default = null;
+                description = ''
+                  OSS telemetry setting. Set to "off" to disable telemetry.
+                '';
+              };
+
+              telemetryEnterpriseDsn = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                description = ''
+                  Enterprise telemetry DSN for custom telemetry endpoints.
+                '';
+              };
+
+              disableVersionChecks = mkOption {
+                type = types.nullOr types.bool;
+                default = null;
+                description = ''
+                  Whether to disable version checks.
+                '';
+              };
+
+              disableAutoUpdates = mkOption {
+                type = types.nullOr types.bool;
+                default = null;
+                description = ''
+                  Whether to disable automatic updates.
+                '';
+              };
+
+              updateChannel = mkOption {
+                type = types.nullOr (types.enum [ "latest" "next" ]);
+                default = null;
+                description = ''
+                  Update channel: "latest" for stable releases, "next" for pre-releases.
+                '';
+              };
+
+              featureFlags = mkOption {
+                type = jsonFormat.type;
+                default = { };
+                example = { rewrite_stash = true; };
+                description = ''
+                  Feature flags as a JSON-compatible attribute set.
+                  See git-ai documentation for available flags.
+                '';
+              };
             };
           };
 
           config = mkIf cfg.enable {
+            # Add git-ai to user packages
+            home.packages = [ cfg.package ];
+
             # Create config directory and file
-            home.file.".git-ai/config.json" = mkIf cfg.createConfig {
-              text = builtins.toJSON {
-                git_path = "${pkgs.git}/bin/git";
-              };
+            home.file.".git-ai/config.json" = {
+              source = jsonFormat.generate "git-ai-config.json" configFile;
             };
 
             # Run install-hooks on activation
