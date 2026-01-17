@@ -221,6 +221,8 @@
             prompt_storage = cfg.settings.promptStorage;
             api_base_url = cfg.settings.apiBaseUrl;
             exclude_prompts_in_repositories = cfg.settings.excludePromptsInRepositories;
+            include_prompts_in_repositories = cfg.settings.includePromptsInRepositories;
+            default_prompt_storage = cfg.settings.defaultPromptStorage;
             allow_repositories = cfg.settings.allowRepositories;
             exclude_repositories = cfg.settings.excludeRepositories;
             telemetry_oss = cfg.settings.telemetryOss;
@@ -303,7 +305,31 @@
                 example = [ "https://github.com/private/*" "*" ];
                 description = ''
                   List of repository URL patterns (globs) to exclude from prompt sharing.
-                  Use "*" to exclude all repositories.
+                  Use "*" to exclude all repositories. Exclusions take precedence over inclusions.
+                  Patterns are matched against remote URLs (HTTPS or SSH format).
+                '';
+              };
+
+              includePromptsInRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/myorg/*" "*github.com*positron*" ];
+                description = ''
+                  List of repository URL patterns (globs) for which promptStorage mode applies.
+                  Repositories not matching these patterns use defaultPromptStorage instead.
+                  If empty or null, promptStorage applies to all repositories (legacy behavior).
+                  Patterns are matched against remote URLs (HTTPS or SSH format).
+                '';
+              };
+
+              defaultPromptStorage = mkOption {
+                type = types.nullOr (types.enum [ "default" "notes" "local" ]);
+                default = null;
+                description = ''
+                  Fallback prompt storage mode for repositories NOT matching includePromptsInRepositories.
+                  If not specified, defaults to "local" (safest option - prompts stay local only).
+                  Use this with includePromptsInRepositories to have different storage modes for
+                  work repos vs personal repos.
                 '';
               };
 
@@ -432,6 +458,8 @@
             prompt_storage = cfg.settings.promptStorage;
             api_base_url = cfg.settings.apiBaseUrl;
             exclude_prompts_in_repositories = cfg.settings.excludePromptsInRepositories;
+            include_prompts_in_repositories = cfg.settings.includePromptsInRepositories;
+            default_prompt_storage = cfg.settings.defaultPromptStorage;
             allow_repositories = cfg.settings.allowRepositories;
             exclude_repositories = cfg.settings.excludeRepositories;
             telemetry_oss = cfg.settings.telemetryOss;
@@ -501,7 +529,31 @@
                 example = [ "https://github.com/private/*" "*" ];
                 description = ''
                   List of repository URL patterns (globs) to exclude from prompt sharing.
-                  Use "*" to exclude all repositories.
+                  Use "*" to exclude all repositories. Exclusions take precedence over inclusions.
+                  Patterns are matched against remote URLs (HTTPS or SSH format).
+                '';
+              };
+
+              includePromptsInRepositories = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                default = null;
+                example = [ "https://github.com/myorg/*" "*github.com*positron*" ];
+                description = ''
+                  List of repository URL patterns (globs) for which promptStorage mode applies.
+                  Repositories not matching these patterns use defaultPromptStorage instead.
+                  If empty or null, promptStorage applies to all repositories (legacy behavior).
+                  Patterns are matched against remote URLs (HTTPS or SSH format).
+                '';
+              };
+
+              defaultPromptStorage = mkOption {
+                type = types.nullOr (types.enum [ "default" "notes" "local" ]);
+                default = null;
+                description = ''
+                  Fallback prompt storage mode for repositories NOT matching includePromptsInRepositories.
+                  If not specified, defaults to "local" (safest option - prompts stay local only).
+                  Use this with includePromptsInRepositories to have different storage modes for
+                  work repos vs personal repos.
                 '';
               };
 
