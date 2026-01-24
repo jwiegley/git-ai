@@ -50,19 +50,6 @@ On commit, Git AI saves the final AI-attributions into a Git Note. These notes p
 
 The format of the notes is outlined here in the [Git AI Standard v3.0.0](https://github.com/git-ai-project/git-ai/blob/main/specs/git_ai_standard_v3.0.0.md)
 
-## Installing the Stats Bot (early access)
-
-Aggregate `git-ai` data at the PR, developer, Repository and Organization levels:
-
-- AI authorship breakdown for every Pull Request
-- Measure % of code that is AI generated through the entire SDLC
-- Compare accepted-rate for code written by each Agent + Model. 
-- AI-Code Halflife (how durable is the AI code)
-> [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
-
-![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/dashboard.png)
-
-
 ## Goals of `git-ai` project
 
 🤖 **Track AI code in a Multi-Agent** world. Because developers get to choose their tools, engineering teams need a **vendor agnostic** way to track AI impact in their repos.
@@ -101,3 +88,16 @@ Aggregate `git-ai` data at the PR, developer, Repository and Organization levels
 | _your agent here_                                                                          |            |         |
 
 > **Building a Coding Agent?** [Add support for Git AI by following this guide](https://usegitai.com/docs/cli/add-your-agent)
+
+## Installing the Stats Bot (early access)
+
+Aggregate `git-ai` data at the PR, developer, Repository and Organization levels:
+
+- AI authorship breakdown for every Pull Request
+- Measure % of code that is AI generated through the entire SDLC
+- Compare accepted-rate for code written by each Agent + Model. 
+- AI-Code Halflife (how durable is the AI code)
+> [Get early access by chatting with the maintainers](https://calendly.com/acunniffe/meeting-with-git-ai-authors)
+
+![alt](https://github.com/acunniffe/git-ai/raw/main/assets/docs/dashboard.png)
+
