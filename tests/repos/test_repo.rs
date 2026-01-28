@@ -60,6 +60,24 @@ impl TestRepo {
         repo
     }
 
+    /// Create a standalone bare repository for testing
+    pub fn new_bare() -> Self {
+        let mut rng = rand::thread_rng();
+        let n: u64 = rng.gen_range(0..10000000000);
+        let base = std::env::temp_dir();
+        let path = base.join(n.to_string());
+        let test_db_path = base.join(format!("{}-db", n));
+
+        Repository::init_bare(&path).expect("failed to init bare repository");
+
+        Self {
+            path,
+            feature_flags: FeatureFlags::default(),
+            config_patch: None,
+            test_db_path,
+        }
+    }
+
     /// Create a pair of test repos: a local mirror and its upstream remote.
     /// The mirror is cloned from the upstream, so "origin" is automatically configured.
     /// Returns (mirror, upstream) tuple.

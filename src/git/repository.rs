@@ -1,3 +1,5 @@
+use regex::Regex;
+
 use crate::authorship::authorship_log_serialization::AuthorshipLog;
 use crate::authorship::rebase_authorship::rewrite_authorship_if_needed;
 use crate::config;
@@ -1016,14 +1018,20 @@ impl Repository {
         Ok(remotes)
     }
 
+    /// Get the git config file for this repository and fallback to global config if not found.
+    fn get_git_config_file(&self) -> Result<gix_config::File<'static>, GitAiError> {
+        match gix_config::File::from_git_dir(self.path().to_path_buf()) {
+            Ok(git_config_file) => Ok(git_config_file),
+            Err(e) => match gix_config::File::from_globals() {
+                Ok(system_config) => Ok(system_config),
+                Err(_) => Err(GitAiError::GixError(e.to_string())),
+            },
+        }
+    }
+    /// Get config value for a given key as a String.
     pub fn config_get_str(&self, key: &str) -> Result<Option<String>, GitAiError> {
-        let mut args = self.global_args_for_exec();
-        args.push("config".to_string());
-        args.push("--get".to_string());
-        args.push(key.to_string());
-        match exec_git(&args) {
-            Ok(output) => Ok(Some(String::from_utf8(output.stdout)?.trim().to_string())),
-            Err(GitAiError::GitCliError { code: Some(1), .. }) => Ok(None),
+        match self.get_git_config_file() {
+            Ok(git_config_file) => Ok(git_config_file.string(key).map(|cow| cow.to_string())),
             Err(e) => Err(e),
         }
     }
@@ -1034,39 +1042,40 @@ impl Repository {
         &self,
         pattern: &str,
     ) -> Result<std::collections::HashMap<String, String>, GitAiError> {
-        let mut args = self.global_args_for_exec();
-        args.push("config".to_string());
-        args.push("--get-regexp".to_string());
-        args.push(pattern.to_string());
-        match exec_git(&args) {
-            Ok(output) => {
-                let stdout = String::from_utf8(output.stdout)?;
-                let mut result = std::collections::HashMap::new();
-                for line in stdout.lines() {
-                    // Format: "key value" (space-separated)
-                    if let Some((key, value)) = line.split_once(' ') {
-                        result.insert(key.to_string(), value.to_string());
+        match self.get_git_config_file() {
+            Ok(git_config_file) => {
+                let mut matches: HashMap<String, String> = HashMap::new();
+
+                let re = Regex::new(pattern)
+                    .map_err(|e| GitAiError::Generic(format!("Invalid regex pattern: {}", e)))?;
+
+                // iterate over all sections
+                for section in git_config_file.sections() {
+                    // Support subsections in the key
+                    let section_name = section.header().name().to_string().to_lowercase();
+                    let subsection = section.header().subsection_name();
+
+                    for value_name in section.body().value_names() {
+                        let value_name_str = value_name.to_string().to_lowercase();
+                        let full_key = if let Some(sub) = subsection {
+                            format!("{}.{}.{}", section_name, sub, value_name_str)
+                        } else {
+                            format!("{}.{}", section_name, value_name_str)
+                        };
+
+                        if re.is_match(&full_key) {
+                            if let Some(value) =
+                                section.body().value(value_name).map(|c| c.to_string())
+                            {
+                                matches.insert(full_key, value);
+                            }
+                        }
                     }
                 }
-                Ok(result)
-            }
-            // Exit code 1 means no matches found
-            Err(GitAiError::GitCliError { code: Some(1), .. }) => {
-                Ok(std::collections::HashMap::new())
+                Ok(matches)
             }
             Err(e) => Err(e),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn config_set_str(&self, key: &str, value: &str) -> Result<(), GitAiError> {
-        let mut args = self.global_args_for_exec();
-        args.push("config".to_string());
-        args.push("set".to_string());
-        args.push(key.to_string());
-        args.push(value.to_string());
-        exec_git(&args)?;
-        Ok(())
     }
 
     /// Get the git version as a tuple (major, minor, patch).
@@ -1834,7 +1843,7 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
 
     let both_dirs = both_dirs.trim();
     let lines: Vec<&str> = both_dirs.split("\n").collect();
-    
+
     if lines.len() < 2 {
         return Err(GitAiError::Generic(format!(
             "Expected git rev-parse to return 2 lines (git dir and work dir), got {}:\n{}",
@@ -1842,7 +1851,7 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
             both_dirs
         )));
     }
-    
+
     let git_dir_str = lines[0];
     let workdir_str = lines[1];
     let git_dir = PathBuf::from(git_dir_str);
@@ -1957,12 +1966,11 @@ pub fn find_repository_for_file(
         .canonicalize()
         .unwrap_or_else(|_| start_dir.clone());
 
-    let workspace_boundary = workspace_root
-        .map(|root| {
-            PathBuf::from(root)
-                .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(root))
-        });
+    let workspace_boundary = workspace_root.map(|root| {
+        PathBuf::from(root)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(root))
+    });
 
     // Walk up the directory tree looking for a .git directory
     let mut current_dir = Some(start_dir.as_path());
@@ -2347,18 +2355,9 @@ mod tests {
     #[test]
     fn test_parse_git_version_standard() {
         // Standard git version format
-        assert_eq!(
-            parse_git_version("git version 2.39.3"),
-            Some((2, 39, 3))
-        );
-        assert_eq!(
-            parse_git_version("git version 2.23.0"),
-            Some((2, 23, 0))
-        );
-        assert_eq!(
-            parse_git_version("git version 1.8.5"),
-            Some((1, 8, 5))
-        );
+        assert_eq!(parse_git_version("git version 2.39.3"), Some((2, 39, 3)));
+        assert_eq!(parse_git_version("git version 2.23.0"), Some((2, 23, 0)));
+        assert_eq!(parse_git_version("git version 1.8.5"), Some((1, 8, 5)));
     }
 
     #[test]
@@ -2382,19 +2381,13 @@ mod tests {
     #[test]
     fn test_parse_git_version_no_patch() {
         // Version without patch number
-        assert_eq!(
-            parse_git_version("git version 2.39"),
-            Some((2, 39, 0))
-        );
+        assert_eq!(parse_git_version("git version 2.39"), Some((2, 39, 0)));
     }
 
     #[test]
     fn test_parse_git_version_with_newline() {
         // Version string with trailing newline
-        assert_eq!(
-            parse_git_version("git version 2.39.3\n"),
-            Some((2, 39, 3))
-        );
+        assert_eq!(parse_git_version("git version 2.39.3\n"), Some((2, 39, 3)));
     }
 
     #[test]

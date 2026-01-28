@@ -11,6 +11,8 @@ pub enum GitAiError {
         stderr: String,
         args: Vec<String>,
     },
+    /// Errors from  Gix
+    GixError(String),
     JsonError(serde_json::Error),
     Utf8Error(std::str::Utf8Error),
     FromUtf8Error(std::string::FromUtf8Error),
@@ -41,6 +43,7 @@ impl fmt::Display for GitAiError {
             GitAiError::PresetError(e) => write!(f, "{}", e),
             GitAiError::SqliteError(e) => write!(f, "SQLite error: {}", e),
             GitAiError::Generic(e) => write!(f, "Generic error: {}", e),
+            GitAiError::GixError(e) => write!(f, "Gix error: {}", e),
         }
     }
 }
@@ -103,6 +106,7 @@ impl Clone for GitAiError {
             GitAiError::PresetError(s) => GitAiError::PresetError(s.clone()),
             GitAiError::SqliteError(e) => GitAiError::Generic(format!("SQLite error: {}", e)),
             GitAiError::Generic(s) => GitAiError::Generic(s.clone()),
+            GitAiError::GixError(e) => GitAiError::Generic(format!("Gix error: {}", e)),
         }
     }
 }
