@@ -8,6 +8,13 @@ pub fn ensure_git_symlinks() -> Result<(), GitAiError> {
     // Get current executable path
     let exe_path = std::env::current_exe()?;
 
+    // Skip symlink creation if running from Nix store (read-only filesystem)
+    // or other read-only install locations. In these cases, the packaging system
+    // (e.g., Nix flake) should handle creating the libexec symlink at build time.
+    if exe_path.to_string_lossy().contains("/nix/store") {
+        return Ok(());
+    }
+
     // Get parent directories: binary_dir is e.g. ~/.git-ai/bin, base_dir is ~/.git-ai
     let binary_dir = exe_path
         .parent()

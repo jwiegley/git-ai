@@ -107,6 +107,12 @@
           name = "git-ai-minimal-${git-ai-unwrapped.version}";
           paths = [ git-ai-wrapped git-ai-unwrapped git-og ];
 
+          # Create libexec symlink for Fork compatibility
+          # Fork looks for libexec relative to the git binary location
+          postBuild = ''
+            ln -s ${pkgs.git}/libexec $out/libexec
+          '';
+
           meta = git-ai-unwrapped.meta // {
             description = git-ai-unwrapped.meta.description + " (without git wrapper)";
           };
@@ -117,6 +123,12 @@
         git-ai-package = pkgs.symlinkJoin {
           name = "git-ai-${git-ai-unwrapped.version}";
           paths = [ git-ai-wrapped git-wrapper git-ai-unwrapped git-og ];
+
+          # Create libexec symlink for Fork compatibility
+          # Fork looks for libexec relative to the git binary location
+          postBuild = ''
+            ln -s ${pkgs.git}/libexec $out/libexec
+          '';
 
           meta = git-ai-unwrapped.meta // {
             description = git-ai-unwrapped.meta.description + " (with git wrapper)";
