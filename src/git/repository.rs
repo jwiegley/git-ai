@@ -1037,6 +1037,11 @@ impl Repository {
     }
 
     /// Get all config values matching a regex pattern.
+    ///
+    /// Regular expression matching is currently case-sensitive
+    /// and done against a canonicalized version of the key
+    /// in which section and variable names are lowercased, but subsection names are not.
+    ///
     /// Returns a HashMap of key -> value for all matching config entries.
     pub fn config_get_regexp(
         &self,
