@@ -278,7 +278,7 @@ fn process_completed_rebase(
     debug_log("✓ Rebase authorship rewrite complete");
 }
 
-fn build_rebase_commit_mappings(
+pub(crate) fn build_rebase_commit_mappings(
     repository: &Repository,
     original_head: &str,
     new_head: &str,

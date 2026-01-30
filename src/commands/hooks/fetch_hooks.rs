@@ -1,11 +1,11 @@
-use crate::authorship::virtual_attribution::{
-    VirtualAttributions, restore_stashed_va,
-};
+use crate::authorship::virtual_attribution::{VirtualAttributions, restore_stashed_va};
 use crate::commands::git_handlers::CommandHooksContext;
 use crate::commands::hooks::commit_hooks::get_commit_default_author;
+use crate::commands::hooks::rebase_hooks::build_rebase_commit_mappings;
 use crate::commands::upgrade;
 use crate::git::cli_parser::{ParsedGitInvocation, is_dry_run};
 use crate::git::repository::{Repository, exec_git, find_repository};
+use crate::git::rewrite_log::RewriteLogEvent;
 use crate::git::sync_authorship::{fetch_authorship_notes, fetch_remote_from_args};
 use crate::utils::debug_log;
 
@@ -135,7 +135,7 @@ pub fn fetch_pull_post_command_hook(
 /// 2. Renames working log for fast-forward pulls to preserve attributions.
 pub fn pull_post_command_hook(
     repository: &mut Repository,
-    _parsed_args: &ParsedGitInvocation,
+    parsed_args: &ParsedGitInvocation,
     exit_status: std::process::ExitStatus,
     command_hooks_context: &mut CommandHooksContext,
 ) {
@@ -169,16 +169,22 @@ pub fn pull_post_command_hook(
     // Check if we have a stashed VA to restore (from pull --rebase --autostash)
     if let Some(stashed_va) = command_hooks_context.stashed_va.take() {
         restore_stashed_va(repository, &old_head, &new_head, stashed_va);
-        return;
     }
 
-    // No stashed VA - check for fast-forward pull and rename working log if applicable
+    // Check for fast-forward pull and rename working log if applicable
     if was_fast_forward_pull(repository, &new_head) {
         debug_log(&format!(
             "Fast-forward detected: {} -> {}",
             old_head, new_head
         ));
         let _ = repository.storage.rename_working_log(&old_head, &new_head);
+        return;
+    }
+
+    // Handle committed authorship rewriting for pull --rebase
+    let config = get_pull_rebase_autostash_config(parsed_args, repository);
+    if config.is_rebase {
+        process_completed_pull_rebase(repository, &old_head, &new_head);
     }
 }
 
@@ -298,4 +304,53 @@ fn has_uncommitted_changes(repository: &Repository) -> bool {
         Ok(filenames) => !filenames.is_empty(),
         Err(_) => false,
     }
+}
+
+/// Rewrite authorship for committed local changes that were rebased by `git pull --rebase`.
+/// Uses the same commit-mapping and rewrite logic as `rebase_hooks::process_completed_rebase`.
+fn process_completed_pull_rebase(repository: &mut Repository, original_head: &str, new_head: &str) {
+    debug_log(&format!(
+        "Processing pull --rebase authorship: {} -> {}",
+        original_head, new_head
+    ));
+
+    let (original_commits, new_commits) =
+        match build_rebase_commit_mappings(repository, original_head, new_head) {
+            Ok(mappings) => {
+                debug_log(&format!(
+                    "Pull rebase mappings: {} original -> {} new commits",
+                    mappings.0.len(),
+                    mappings.1.len()
+                ));
+                mappings
+            }
+            Err(e) => {
+                debug_log(&format!("Failed to build pull rebase mappings: {}", e));
+                return;
+            }
+        };
+
+    if original_commits.is_empty() {
+        debug_log("No committed changes to rewrite authorship for after pull --rebase");
+        return;
+    }
+
+    let rebase_event =
+        RewriteLogEvent::rebase_complete(crate::git::rewrite_log::RebaseCompleteEvent::new(
+            original_head.to_string(),
+            new_head.to_string(),
+            false, // pull --rebase is not interactive
+            original_commits,
+            new_commits,
+        ));
+
+    let commit_author = get_commit_default_author(repository, &[]);
+    repository.handle_rewrite_log_event(
+        rebase_event,
+        commit_author,
+        false, // don't suppress output
+        true,  // save to log
+    );
+
+    debug_log("Pull --rebase authorship rewrite complete");
 }

@@ -388,6 +388,12 @@ pub fn rewrite_authorship_after_rebase_v2(
     ));
 
     // Step 2: Create VirtualAttributions from original_head (before rebase)
+    // Compute merge base to bound blame depth — without this, blame walks entire file history
+    let new_head = new_commits.last().unwrap();
+    let merge_base = repo
+        .merge_base(original_head.to_string(), new_head.to_string())
+        .ok();
+
     let repo_clone = repo.clone();
     let original_head_clone = original_head.to_string();
     let pathspecs_clone = pathspecs.clone();
@@ -397,7 +403,7 @@ pub fn rewrite_authorship_after_rebase_v2(
             repo_clone,
             original_head_clone,
             &pathspecs_clone,
-            None,
+            merge_base,
         )
         .await
     })?;
