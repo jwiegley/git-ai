@@ -909,8 +909,8 @@ EOF
     # - human_additions: 2 (H: Human Line 2 + Line 5: Initial in final diff)
     # - ai_additions: 4 (AI Line 1, 3, 4, 5 in final diff)
     # - ai_accepted: 4 (all AI lines accepted)
-    # - total_ai_additions: 2 (from merged log after squash-authorship)
-    # - total_ai_deletions: 3 (from merged log after squash-authorship)
+    # - total_ai_additions: 5 (3 from commit 1 + 2 from commit 2)
+    # - total_ai_deletions: 5 (2 from commit 1 + 3 from commit 2)
     # - tool_model_breakdown.ai_additions: 4 (accepted + mixed in final diff)
 
     expected_json='{
@@ -918,8 +918,8 @@ EOF
         "mixed_additions": 0,
         "ai_additions": 4,
         "ai_accepted": 4,
-        "total_ai_additions": 2,
-        "total_ai_deletions": 3,
+        "total_ai_additions": 5,
+        "total_ai_deletions": 5,
         "time_waiting_for_ai": 0,
         "git_diff_deleted_lines": 0,
         "git_diff_added_lines": 6,
@@ -928,8 +928,8 @@ EOF
                 "ai_additions": 4,
                 "mixed_additions": 0,
                 "ai_accepted": 4,
-                "total_ai_additions": 2,
-                "total_ai_deletions": 3,
+                "total_ai_additions": 5,
+                "total_ai_deletions": 5,
                 "time_waiting_for_ai": 0
             }
         }
@@ -1843,7 +1843,7 @@ EOF
     export GIT_EDITOR="echo 'Squashed: Implement user creation endpoint with validation and logging' >"
     
     # Perform the interactive rebase
-    git rebase -i --autosquash HEAD~2 2>&1 | tee /dev/stderr
+    git rebase -i --autosquash HEAD~2 2>&1
     
     unset GIT_SEQUENCE_EDITOR
     unset GIT_EDITOR

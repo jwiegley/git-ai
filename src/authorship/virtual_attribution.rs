@@ -1138,7 +1138,8 @@ impl VirtualAttributions {
         Ok(authorship_log)
     }
 
-    /// Merge prompts from multiple sources, picking the newest PromptRecord for each prompt_id
+    /// Merge prompts from multiple sources, picking the newest PromptRecord for each prompt_id.
+    /// When a prompt_id appears multiple times, accumulate totals across all records (except overridden lines).
     ///
     /// This function collects all PromptRecords for each unique prompt_id across all sources,
     /// sorts them by age (oldest to newest), and returns the newest version of each prompt.
@@ -1168,8 +1169,20 @@ impl VirtualAttributions {
             // Sort records oldest to newest using the Ord implementation
             all_records.sort();
 
-            // Take the last (newest) record
+            // Take the last (newest) record and accumulate totals across all records
             if let Some(newest_record) = all_records.last() {
+                let mut merged_record = newest_record.clone();
+                let mut total_additions = 0u32;
+                let mut total_deletions = 0u32;
+
+                for record in &all_records {
+                    total_additions = total_additions.saturating_add(record.total_additions);
+                    total_deletions = total_deletions.saturating_add(record.total_deletions);
+                }
+
+                merged_record.total_additions = total_additions;
+                merged_record.total_deletions = total_deletions;
+
                 let mut prompt_commits = BTreeMap::new();
 
                 // Use commit sha from first source that has this prompt, or "merged" if not found
@@ -1182,7 +1195,7 @@ impl VirtualAttributions {
                     })
                     .unwrap_or_else(|| "merged".to_string());
 
-                prompt_commits.insert(commit_sha, newest_record.clone());
+                prompt_commits.insert(commit_sha, merged_record);
                 merged_prompts.insert(prompt_id.clone(), prompt_commits);
             }
         }
@@ -1385,14 +1398,15 @@ pub fn merge_attributions_favoring_first(
             .insert(file_path, final_content.clone());
     }
 
-    // Save total_additions and total_deletions from the newest PromptRecord
+    // Save total_additions and total_deletions by summing across sources so squash/rebase preserves totals.
     let mut saved_totals: HashMap<String, (u32, u32)> = HashMap::new();
-    for (prompt_id, commits) in &merged.prompts {
-        for prompt_record in commits.values() {
-            saved_totals.insert(
-                prompt_id.clone(),
-                (prompt_record.total_additions, prompt_record.total_deletions),
-            );
+    for source in [&primary.prompts, &secondary.prompts] {
+        for (prompt_id, commits) in source {
+            for prompt_record in commits.values() {
+                let entry = saved_totals.entry(prompt_id.clone()).or_insert((0, 0));
+                entry.0 = entry.0.saturating_add(prompt_record.total_additions);
+                entry.1 = entry.1.saturating_add(prompt_record.total_deletions);
+            }
         }
     }
 

@@ -310,6 +310,25 @@ pub fn rewrite_authorship_after_squash_or_rebase(
     let mut authorship_log = merged_va.to_authorship_log()?;
     authorship_log.metadata.base_commit_sha = merge_commit_sha.to_string();
 
+    // Preserve accumulated totals from source commits (squash/rebase should not drop session totals).
+    let mut summed_totals: HashMap<String, (u32, u32)> = HashMap::new();
+    for commit_sha in &source_commits {
+        if let Ok(log) = get_reference_as_authorship_log_v3(repo, commit_sha) {
+            for (prompt_id, record) in log.metadata.prompts {
+                let entry = summed_totals.entry(prompt_id).or_insert((0, 0));
+                entry.0 = entry.0.saturating_add(record.total_additions);
+                entry.1 = entry.1.saturating_add(record.total_deletions);
+            }
+        }
+    }
+
+    for (prompt_id, record) in authorship_log.metadata.prompts.iter_mut() {
+        if let Some((additions, deletions)) = summed_totals.get(prompt_id) {
+            record.total_additions = *additions;
+            record.total_deletions = *deletions;
+        }
+    }
+
     debug_log(&format!(
         "Created authorship log with {} attestations, {} prompts",
         authorship_log.attestations.len(),
