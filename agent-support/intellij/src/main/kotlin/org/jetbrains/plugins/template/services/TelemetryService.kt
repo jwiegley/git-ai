@@ -93,7 +93,12 @@ class TelemetryService : Disposable {
 
     private fun getPluginVersion(): String {
         return try {
-            PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.version ?: "unknown"
+            // Use reflection to call PluginId.getId() to avoid Kotlin companion object
+            // bytecode that doesn't exist in older IntelliJ versions (pre-252)
+            val pluginIdClass = Class.forName("com.intellij.openapi.extensions.PluginId")
+            val getIdMethod = pluginIdClass.getMethod("getId", String::class.java)
+            val pluginId = getIdMethod.invoke(null, PLUGIN_ID) as? PluginId
+            pluginId?.let { PluginManagerCore.getPlugin(it)?.version } ?: "unknown"
         } catch (e: Exception) {
             "unknown"
         }
