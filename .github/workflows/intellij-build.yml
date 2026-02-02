@@ -55,6 +55,8 @@ jobs:
 
       # Build plugin
       - name: Build plugin
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ./gradlew buildPlugin
 
       # Prepare plugin archive content for creating artifact
@@ -108,6 +110,8 @@ jobs:
 
       # Run tests
       - name: Run Tests
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ./gradlew check
 
       # Collect Tests Result of failed tests
@@ -197,6 +201,8 @@ jobs:
 
       # Run Verify Plugin task and IntelliJ Plugin Verifier tool
       - name: Run Plugin Verification tasks
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ./gradlew verifyPlugin
 
       # Collect Plugin Verifier Result

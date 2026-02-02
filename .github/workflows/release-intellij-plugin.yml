@@ -52,12 +52,15 @@ jobs:
 
       # Build the plugin
       - name: Build Plugin
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ./gradlew buildPlugin
 
       # Publish the plugin to JetBrains Marketplace
       - name: Publish Plugin
         if: ${{ !inputs.dry_run }}
         env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           PUBLISH_TOKEN: ${{ secrets.INTELLIJ_PUBLISH_TOKEN }}
           CERTIFICATE_CHAIN: ${{ secrets.INTELLIJ_CERTIFICATE_CHAIN }}
           PRIVATE_KEY: ${{ secrets.INTELLIJ_PRIVATE_KEY }}

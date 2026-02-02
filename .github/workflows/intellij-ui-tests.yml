@@ -61,6 +61,8 @@ jobs:
 
       # Run IDEA prepared for UI testing
       - name: Run IDE
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ${{ matrix.runIde }}
 
       # Wait for IDEA to be started
@@ -73,4 +75,6 @@ jobs:
 
       # Run tests
       - name: Tests
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ./gradlew test
