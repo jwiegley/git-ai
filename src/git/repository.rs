@@ -1849,7 +1849,10 @@ impl Repository {
 pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiError> {
     let mut args = global_args.clone();
     args.push("rev-parse".to_string());
-    args.push("--absolute-git-dir".to_string());
+    // Use --git-dir instead of --absolute-git-dir for compatibility with Git < 2.13
+    // (--absolute-git-dir was added in Git 2.13; older versions output the literal
+    // string "absolute-git-dir" instead of the resolved path).
+    args.push("--git-dir".to_string());
     args.push("--show-toplevel".to_string());
 
     let output = exec_git(&args)?;
@@ -1868,8 +1871,13 @@ pub fn find_repository(global_args: &Vec<String>) -> Result<Repository, GitAiErr
 
     let git_dir_str = lines[0];
     let workdir_str = lines[1];
-    let git_dir = PathBuf::from(git_dir_str);
     let workdir = PathBuf::from(workdir_str);
+    // --git-dir may return a relative path (e.g. ".git"); resolve it against the toplevel
+    let git_dir = if Path::new(git_dir_str).is_relative() {
+        workdir.join(git_dir_str)
+    } else {
+        PathBuf::from(git_dir_str)
+    };
     if !git_dir.is_dir() {
         return Err(GitAiError::Generic(format!(
             "Git directory does not exist: {}",
