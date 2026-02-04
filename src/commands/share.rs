@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 
 /// Handle the `share` command
 ///
-/// Usage: git-ai share [<prompt_id>] [--title <title>]
+/// Usage: `git-ai share [<prompt_id>] [--title <title>]`
 ///
 /// If prompt_id is provided, uses CLI mode. Otherwise, launches TUI.
 pub fn handle_share(args: &[String]) {

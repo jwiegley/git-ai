@@ -43,13 +43,13 @@ pub mod committed_pos {
 /// **Array fields (parallel arrays, index 0 = "all" for aggregate, index 1+ = per tool/model):**
 /// | Position | Name | Type |
 /// |----------|------|------|
-/// | 3 | tool_model_pairs | Vec<String> |
-/// | 4 | mixed_additions | Vec<u32> |
-/// | 5 | ai_additions | Vec<u32> |
-/// | 6 | ai_accepted | Vec<u32> |
-/// | 7 | total_ai_additions | Vec<u32> |
-/// | 8 | total_ai_deletions | Vec<u32> |
-/// | 9 | time_waiting_for_ai | Vec<u64> |
+/// | 3 | tool_model_pairs | `Vec<String>` |
+/// | 4 | mixed_additions | `Vec<u32>` |
+/// | 5 | ai_additions | `Vec<u32>` |
+/// | 6 | ai_accepted | `Vec<u32>` |
+/// | 7 | total_ai_additions | `Vec<u32>` |
+/// | 8 | total_ai_deletions | `Vec<u32>` |
+/// | 9 | time_waiting_for_ai | `Vec<u64>` |
 /// | 10 | first_checkpoint_ts | u64 |
 /// | 11 | commit_subject | String |
 /// | 12 | commit_body | String |
@@ -398,7 +398,7 @@ pub mod install_hooks_pos {
 /// |----------|------|------|
 /// | 0 | tool_id | String |
 /// | 1 | status | String |
-/// | 2 | message | Option<String> |
+/// | 2 | message | `Option<String>` |
 #[derive(Debug, Clone, Default)]
 pub struct InstallHooksValues {
     pub tool_id: PosField<String>,

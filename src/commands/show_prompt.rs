@@ -3,7 +3,7 @@ use crate::authorship::prompt_utils::find_prompt;
 
 /// Handle the `show-prompt` command
 ///
-/// Usage: git-ai show-prompt <prompt_id> [--commit <rev>] [--offset <n>]
+/// Usage: `git-ai show-prompt <prompt_id> [--commit <rev>] [--offset <n>]`
 ///
 /// Returns the prompt object from the authorship note where the given prompt ID is found.
 /// By default returns from the most recent commit containing the prompt.

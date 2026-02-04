@@ -62,7 +62,7 @@ fn try_load_auth_token() -> Option<String> {
 /// API client context with optional authentication
 #[derive(Debug, Clone)]
 pub struct ApiContext {
-    /// Base URL for the API (e.g., "https://app.com")
+    /// Base URL for the API (e.g., `https://app.com`)
     pub base_url: String,
     /// Optional authentication token
     pub auth_token: Option<String>,
