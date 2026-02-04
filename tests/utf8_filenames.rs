@@ -458,6 +458,219 @@ fn test_japanese_kanji_filename() {
 }
 
 // =============================================================================
+// Phase 9: Edge Cases and Stress Tests
+// =============================================================================
+
+#[test]
+fn test_filename_with_all_unicode_categories() {
+    let repo = TestRepo::new();
+
+    // Create an initial commit
+    let mut readme = repo.filename("README.md");
+    readme.set_contents(lines!["# Project"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // AI creates a file with characters from many Unicode categories
+    // Mix of CJK, Arabic, Cyrillic, Greek, emoji
+    let mut mixed_file = repo.filename("Test_中文_🚀_العربية_Русский.txt");
+    mixed_file.set_contents(lines![
+        "Multi-script filename test".ai(),
+        "All Unicode categories should work".ai(),
+        "Chinese, Arabic, Cyrillic, emoji combined".ai(),
+    ]);
+
+    // Commit the multi-category file
+    let commit = repo.stage_all_and_commit("Add multi-category file").unwrap();
+
+    assert_eq!(
+        commit.authorship_log.attestations[0].file_path,
+        "Test_中文_🚀_العربية_Русский.txt",
+        "File path should preserve all Unicode categories"
+    );
+
+    let raw = repo.git_ai(&["stats", "--json"]).unwrap();
+    let json = extract_json_object(&raw);
+    let stats: CommitStats = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(stats.ai_additions, 3, "All 3 lines should be attributed to AI");
+    assert_eq!(stats.human_additions, 0, "No lines should be attributed to human");
+}
+
+#[test]
+fn test_deeply_nested_utf8_directories() {
+    let repo = TestRepo::new();
+
+    // Create an initial commit
+    let mut readme = repo.filename("README.md");
+    readme.set_contents(lines!["# Project"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // AI creates a file in deeply nested directories with different scripts
+    let mut nested_file = repo.filename("src/日本/中国/한국/भारत/العربية/file.txt");
+    nested_file.set_contents(lines![
+        "Deeply nested UTF-8 directories".ai(),
+        "Japanese > Chinese > Korean > Hindi > Arabic > file".ai(),
+    ]);
+
+    // Commit the deeply nested file
+    let commit = repo.stage_all_and_commit("Add deeply nested file").unwrap();
+
+    assert_eq!(
+        commit.authorship_log.attestations[0].file_path,
+        "src/日本/中国/한국/भारत/العربية/file.txt",
+        "File path should preserve all nested UTF-8 directories"
+    );
+
+    let raw = repo.git_ai(&["stats", "--json"]).unwrap();
+    let json = extract_json_object(&raw);
+    let stats: CommitStats = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(stats.ai_additions, 2, "Both lines should be attributed to AI");
+    assert_eq!(stats.human_additions, 0, "No lines should be attributed to human");
+}
+
+#[test]
+fn test_many_utf8_files_in_single_commit() {
+    let repo = TestRepo::new();
+
+    // Create an initial commit
+    let mut readme = repo.filename("README.md");
+    readme.set_contents(lines!["# Project"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // AI creates multiple files with different UTF-8 names in a single commit
+    let mut chinese = repo.filename("中文.txt");
+    chinese.set_contents(lines!["Chinese content".ai()]);
+
+    let mut japanese = repo.filename("日本語.txt");
+    japanese.set_contents(lines!["Japanese content".ai()]);
+
+    let mut korean = repo.filename("한글.txt");
+    korean.set_contents(lines!["Korean content".ai()]);
+
+    let mut arabic = repo.filename("العربية.txt");
+    arabic.set_contents(lines!["Arabic content".ai()]);
+
+    let mut russian = repo.filename("Русский.txt");
+    russian.set_contents(lines!["Russian content".ai()]);
+
+    let mut emoji = repo.filename("🚀🎉.txt");
+    emoji.set_contents(lines!["Emoji content".ai()]);
+
+    // Commit all files together
+    let commit = repo.stage_all_and_commit("Add many UTF-8 files").unwrap();
+
+    assert_eq!(
+        commit.authorship_log.attestations.len(),
+        6,
+        "Should have 6 attestations for all UTF-8 files"
+    );
+
+    let raw = repo.git_ai(&["stats", "--json"]).unwrap();
+    let json = extract_json_object(&raw);
+    let stats: CommitStats = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(stats.ai_additions, 6, "All 6 lines should be attributed to AI");
+    assert_eq!(stats.human_additions, 0, "No lines should be attributed to human");
+}
+
+#[test]
+fn test_filename_starting_with_emoji() {
+    let repo = TestRepo::new();
+
+    // Create an initial commit
+    let mut readme = repo.filename("README.md");
+    readme.set_contents(lines!["# Project"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // AI creates a file that starts with emoji
+    let mut emoji_start = repo.filename("🚀_project.txt");
+    emoji_start.set_contents(lines![
+        "File starting with emoji".ai(),
+    ]);
+
+    // Commit the file
+    let commit = repo.stage_all_and_commit("Add emoji-start file").unwrap();
+
+    assert_eq!(
+        commit.authorship_log.attestations[0].file_path,
+        "🚀_project.txt",
+        "File path starting with emoji should be preserved"
+    );
+
+    let raw = repo.git_ai(&["stats", "--json"]).unwrap();
+    let json = extract_json_object(&raw);
+    let stats: CommitStats = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(stats.ai_additions, 1, "The line should be attributed to AI");
+    assert_eq!(stats.human_additions, 0, "No lines should be attributed to human");
+}
+
+#[test]
+fn test_filename_ending_with_emoji() {
+    let repo = TestRepo::new();
+
+    // Create an initial commit
+    let mut readme = repo.filename("README.md");
+    readme.set_contents(lines!["# Project"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // AI creates a file that ends with emoji
+    let mut emoji_end = repo.filename("project_🚀.txt");
+    emoji_end.set_contents(lines![
+        "File ending with emoji".ai(),
+    ]);
+
+    // Commit the file
+    let commit = repo.stage_all_and_commit("Add emoji-end file").unwrap();
+
+    assert_eq!(
+        commit.authorship_log.attestations[0].file_path,
+        "project_🚀.txt",
+        "File path ending with emoji should be preserved"
+    );
+
+    let raw = repo.git_ai(&["stats", "--json"]).unwrap();
+    let json = extract_json_object(&raw);
+    let stats: CommitStats = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(stats.ai_additions, 1, "The line should be attributed to AI");
+    assert_eq!(stats.human_additions, 0, "No lines should be attributed to human");
+}
+
+#[test]
+fn test_filename_only_non_ascii() {
+    let repo = TestRepo::new();
+
+    // Create an initial commit
+    let mut readme = repo.filename("README.md");
+    readme.set_contents(lines!["# Project"]);
+    repo.stage_all_and_commit("Initial commit").unwrap();
+
+    // AI creates a file with only non-ASCII characters (no extension)
+    let mut only_nonascii = repo.filename("中文日本語한글");
+    only_nonascii.set_contents(lines![
+        "File with only non-ASCII name".ai(),
+    ]);
+
+    // Commit the file
+    let commit = repo.stage_all_and_commit("Add non-ASCII only file").unwrap();
+
+    assert_eq!(
+        commit.authorship_log.attestations[0].file_path,
+        "中文日本語한글",
+        "File path with only non-ASCII should be preserved"
+    );
+
+    let raw = repo.git_ai(&["stats", "--json"]).unwrap();
+    let json = extract_json_object(&raw);
+    let stats: CommitStats = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(stats.ai_additions, 1, "The line should be attributed to AI");
+    assert_eq!(stats.human_additions, 0, "No lines should be attributed to human");
+}
+
+// =============================================================================
 // Phase 8: Unicode Normalization (NFC vs NFD)
 // =============================================================================
 
