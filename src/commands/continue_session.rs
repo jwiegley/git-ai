@@ -14,7 +14,7 @@ use crate::commands::search::{
 use crate::error::GitAiError;
 use crate::git::find_repository_in_path;
 use crate::git::repository::{exec_git, Repository};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::{Command, Stdio};
@@ -78,11 +78,18 @@ pub struct CommitInfo {
     pub author: String,
     pub date: String,
     pub message: String,
+    /// Full commit message body (may differ from subject line)
+    pub full_message: String,
 }
 
 impl CommitInfo {
-    /// Create CommitInfo from a commit SHA by querying git
+    /// Create CommitInfo from a commit SHA by querying git.
+    ///
+    /// Uses a two-step approach: first retrieves structured metadata with a
+    /// delimiter-based format, then fetches the full message body separately
+    /// (since `%B` can contain the delimiter).
     pub fn from_commit_sha(repo: &Repository, sha: &str) -> Result<Self, GitAiError> {
+        // Step 1: Get structured metadata
         let mut args = repo.global_args_for_exec();
         args.push("log".to_string());
         args.push("-1".to_string());
@@ -101,12 +108,205 @@ impl CommitInfo {
             )));
         }
 
+        // Step 2: Get full commit message body (separate call to avoid
+        // delimiter conflicts in multi-line messages)
+        let mut body_args = repo.global_args_for_exec();
+        body_args.push("log".to_string());
+        body_args.push("-1".to_string());
+        body_args.push("--format=%B".to_string());
+        body_args.push(parts[0].to_string());
+
+        let full_message = exec_git(&body_args)
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| parts[3].to_string());
+
         Ok(CommitInfo {
             sha: parts[0].to_string(),
             author: parts[1].to_string(),
             date: parts[2].to_string(),
             message: parts[3].to_string(),
+            full_message,
         })
+    }
+}
+
+/// Get the diff for a specific commit.
+///
+/// Uses `git show --format="" --stat --patch --no-color` to get just the diff
+/// (without the commit message header, which is shown separately).
+/// Truncates output to 100KB.
+fn get_commit_diff(repo: &Repository, sha: &str) -> Result<String, GitAiError> {
+    let mut args = repo.global_args_for_exec();
+    args.push("show".to_string());
+    args.push("--format=".to_string());
+    args.push("--stat".to_string());
+    args.push("--patch".to_string());
+    args.push("--no-color".to_string());
+    args.push(sha.to_string());
+
+    let output = exec_git(&args)?;
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|e| GitAiError::Generic(format!("Invalid UTF-8 in git show output: {}", e)))?;
+
+    const MAX_DIFF_BYTES: usize = 100 * 1024; // 100KB
+    if stdout.len() > MAX_DIFF_BYTES {
+        let truncated = &stdout[..MAX_DIFF_BYTES];
+        // Find the last newline to avoid cutting mid-line
+        let cut_point = truncated.rfind('\n').unwrap_or(MAX_DIFF_BYTES);
+        Ok(format!(
+            "{}\n\n[... diff truncated at 100KB ({} bytes total)]",
+            &stdout[..cut_point],
+            stdout.len()
+        ))
+    } else {
+        Ok(stdout)
+    }
+}
+
+/// Read project context from CLAUDE.md at the repository root.
+///
+/// Returns the file contents capped at 50KB, or `None` if the file
+/// does not exist or cannot be read.
+fn read_project_context(repo: &Repository) -> Option<String> {
+    let workdir = repo.workdir().ok()?;
+    let claude_md = workdir.join("CLAUDE.md");
+    let contents = std::fs::read_to_string(&claude_md).ok()?;
+
+    const MAX_CONTEXT_BYTES: usize = 50 * 1024; // 50KB
+    if contents.len() > MAX_CONTEXT_BYTES {
+        let cut_point = contents[..MAX_CONTEXT_BYTES]
+            .rfind('\n')
+            .unwrap_or(MAX_CONTEXT_BYTES);
+        Some(format!(
+            "{}\n\n[... CLAUDE.md truncated at 50KB ({} bytes total)]",
+            &contents[..cut_point],
+            contents.len()
+        ))
+    } else {
+        Some(contents)
+    }
+}
+
+/// Get current git status information (branch name and recent commits).
+///
+/// Returns a formatted string similar to the `gitStatus` block that Claude Code
+/// provides on startup, or `None` if the information cannot be retrieved.
+fn get_git_status_info(repo: &Repository) -> Option<String> {
+    // Get current branch
+    let mut branch_args = repo.global_args_for_exec();
+    branch_args.push("branch".to_string());
+    branch_args.push("--show-current".to_string());
+
+    let branch = exec_git(&branch_args)
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "(unknown)".to_string());
+
+    // Get recent commit log
+    let mut log_args = repo.global_args_for_exec();
+    log_args.push("log".to_string());
+    log_args.push("--oneline".to_string());
+    log_args.push("-5".to_string());
+
+    let recent_commits = exec_git(&log_args)
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    let mut info = String::new();
+    info.push_str(&format!("Current branch: {}\n", branch));
+    if !recent_commits.is_empty() {
+        info.push_str("\nRecent commits:\n");
+        info.push_str(&recent_commits);
+        info.push('\n');
+    }
+
+    Some(info)
+}
+
+/// All context needed to restore an AI session.
+struct SessionContext {
+    prompts: BTreeMap<String, PromptRecord>,
+    commit_info: Option<CommitInfo>,
+    /// SHA (abbreviated) -> diff text
+    commit_diffs: BTreeMap<String, String>,
+    /// Contents of CLAUDE.md at the repository root
+    project_context: Option<String>,
+    /// Current branch and recent commit log
+    git_status: Option<String>,
+    max_messages: usize,
+}
+
+/// Gather all context needed to restore an AI session.
+///
+/// This is the single entry point for collecting session restoration context.
+/// It retrieves prompts, commit metadata, diffs, project instructions (CLAUDE.md),
+/// and git status information.
+fn gather_session_context(
+    repo: &Repository,
+    result: SearchResult,
+    commit_info: Option<CommitInfo>,
+    options: &ContinueOptions,
+) -> SessionContext {
+    // 1. Collect commit SHAs from prompt_commits before moving prompts
+    let prompt_commit_shas: Vec<String> = result
+        .prompt_commits
+        .values()
+        .flatten()
+        .cloned()
+        .collect();
+
+    // 2. Convert prompts to BTreeMap for ordered iteration
+    let mut prompts: BTreeMap<String, PromptRecord> = result.prompts.into_iter().collect();
+
+    // 3. Redact secrets
+    let redaction_count = redact_secrets_from_prompts(&mut prompts);
+    if redaction_count > 0 {
+        eprintln!("Redacted {} potential secret(s) from output", redaction_count);
+    }
+
+    // 4. Collect commit diffs
+    let mut commit_diffs = BTreeMap::new();
+    let mut seen_shas = HashSet::new();
+
+    // If we have a specific commit_info, include that diff
+    if let Some(ref info) = commit_info {
+        if seen_shas.insert(info.sha.clone()) {
+            if let Ok(diff) = get_commit_diff(repo, &info.sha) {
+                commit_diffs.insert(info.sha[..8.min(info.sha.len())].to_string(), diff);
+            }
+        }
+    }
+
+    // Also get diffs for any commits referenced in the search results
+    for sha in &prompt_commit_shas {
+        if seen_shas.insert(sha.clone()) {
+            if let Ok(diff) = get_commit_diff(repo, sha) {
+                commit_diffs.insert(sha[..8.min(sha.len())].to_string(), diff);
+            }
+        }
+    }
+
+    // 5. Read project context (CLAUDE.md)
+    let project_context = read_project_context(repo);
+
+    // 6. Get git status info
+    let git_status = get_git_status_info(repo);
+
+    // 7. Determine max messages
+    let max_messages = options.max_messages.unwrap_or(50);
+
+    SessionContext {
+        prompts,
+        commit_info,
+        commit_diffs,
+        project_context,
+        git_status,
+        max_messages,
     }
 }
 
@@ -191,17 +391,12 @@ fn handle_continue_tui(repo: &Repository) {
     let mut result = SearchResult::new();
     result.prompts.insert(selected.id.clone(), prompt_record);
 
-    // Convert to BTreeMap for ordered iteration
-    let mut prompts: BTreeMap<String, PromptRecord> = result.prompts.into_iter().collect();
-
-    // Apply secret redaction
-    let redaction_count = redact_secrets_from_prompts(&mut prompts);
-    if redaction_count > 0 {
-        eprintln!("Redacted {} potential secret(s) from output", redaction_count);
-    }
+    // Gather all session context (TUI mode has no commit_info)
+    let options = ContinueOptions::new();
+    let ctx = gather_session_context(repo, result, None, &options);
 
     // Format context block
-    let context = format_context_block(&prompts, None, 50);
+    let context = format_context_block(&ctx);
 
     // Execute the chosen action
     match choice {
@@ -327,23 +522,14 @@ pub fn handle_continue(args: &[String]) {
         std::process::exit(2);
     }
 
-    // Convert to BTreeMap for ordered iteration
-    let mut prompts: BTreeMap<String, PromptRecord> = result.prompts.into_iter().collect();
-
-    // Apply secret redaction
-    let redaction_count = redact_secrets_from_prompts(&mut prompts);
-    if redaction_count > 0 {
-        eprintln!("Redacted {} potential secret(s) from output", redaction_count);
-    }
-
-    // Determine max messages (default 50)
-    let max_messages = parsed.options.max_messages.unwrap_or(50);
+    // Gather all session context
+    let ctx = gather_session_context(&repo, result, commit_info, &parsed.options);
 
     // Format output
     let output = if parsed.options.json {
-        format_context_json(&prompts, commit_info.as_ref())
+        format_context_json(&ctx)
     } else {
-        format_context_block(&prompts, commit_info.as_ref(), max_messages)
+        format_context_block(&ctx)
     };
 
     // Handle output mode (precedence: clipboard > launch/stdout)
@@ -735,11 +921,7 @@ fn parse_continue_args(args: &[String]) -> Result<ParsedContinueArgs, String> {
 
 /// Parse a line range specification (e.g., "10", "10-50")
 /// Format prompts as a structured markdown context block
-fn format_context_block(
-    prompts: &BTreeMap<String, PromptRecord>,
-    commit_info: Option<&CommitInfo>,
-    max_messages: usize,
-) -> String {
+fn format_context_block(ctx: &SessionContext) -> String {
     let mut output = String::with_capacity(8192);
 
     // Preamble
@@ -750,7 +932,7 @@ fn format_context_block(
     );
 
     // Source section (if commit info available)
-    if let Some(info) = commit_info {
+    if let Some(ref info) = ctx.commit_info {
         output.push_str("## Source\n");
         output.push_str(&format!(
             "- **Commit**: {} - \"{}\" ({}, {})\n\n",
@@ -761,11 +943,39 @@ fn format_context_block(
         ));
     }
 
+    // Project context (CLAUDE.md)
+    if let Some(ref project_ctx) = ctx.project_context {
+        output.push_str("## Project Instructions (CLAUDE.md)\n\n");
+        output.push_str(project_ctx);
+        output.push_str("\n\n");
+    }
+
+    // Full commit message (only if it differs from the subject line)
+    if let Some(ref info) = ctx.commit_info {
+        if info.full_message != info.message {
+            output.push_str("## Commit Message\n\n");
+            output.push_str(&info.full_message);
+            output.push_str("\n\n");
+        }
+    }
+
+    // Commit diffs
+    if !ctx.commit_diffs.is_empty() {
+        output.push_str("## Commit Changes\n\n");
+        for (sha, diff) in &ctx.commit_diffs {
+            output.push_str(&format!("### Commit {}\n\n", sha));
+            output.push_str("```diff\n");
+            output.push_str(diff);
+            output.push_str("\n```\n\n");
+        }
+    }
+
     output.push_str("---\n\n");
 
     // Session sections
-    let total_sessions = prompts.len();
-    for (idx, (prompt_id, prompt)) in prompts.iter().enumerate() {
+    let total_sessions = ctx.prompts.len();
+    let max_messages = ctx.max_messages;
+    for (idx, (prompt_id, prompt)) in ctx.prompts.iter().enumerate() {
         let session_num = idx + 1;
 
         output.push_str(&format!(
@@ -790,14 +1000,14 @@ fn format_context_block(
             .filter(|m| !matches!(m, Message::ToolUse { .. }))
             .collect();
 
-        let (messages_to_show, omitted) = if max_messages > 0 && non_tool_messages.len() > max_messages
-        {
-            let omitted = non_tool_messages.len() - max_messages;
-            let slice = &non_tool_messages[omitted..];
-            (slice.to_vec(), Some(omitted))
-        } else {
-            (non_tool_messages, None)
-        };
+        let (messages_to_show, omitted) =
+            if max_messages > 0 && non_tool_messages.len() > max_messages {
+                let omitted = non_tool_messages.len() - max_messages;
+                let slice = &non_tool_messages[omitted..];
+                (slice.to_vec(), Some(omitted))
+            } else {
+                (non_tool_messages, None)
+            };
 
         // Show truncation notice if applicable
         if let Some(n) = omitted {
@@ -839,19 +1049,25 @@ fn format_context_block(
 
     // Footer
     output.push_str("\n---\n\n");
+
+    // Git status info
+    if let Some(ref git_status) = ctx.git_status {
+        output.push_str("gitStatus: This is the current state of the repository.\n");
+        output.push_str(git_status);
+        output.push_str("\n");
+    }
+
     output.push_str("You can now ask follow-up questions about this work.\n");
 
     output
 }
 
 /// Format prompts as JSON for machine consumption
-fn format_context_json(
-    prompts: &BTreeMap<String, PromptRecord>,
-    commit_info: Option<&CommitInfo>,
-) -> String {
+fn format_context_json(ctx: &SessionContext) -> String {
     use serde_json::json;
 
-    let prompts_json: Vec<serde_json::Value> = prompts
+    let prompts_json: Vec<serde_json::Value> = ctx
+        .prompts
         .iter()
         .map(|(id, prompt)| {
             json!({
@@ -890,13 +1106,27 @@ fn format_context_json(
         })
         .collect();
 
+    let commit_diffs_json: serde_json::Value = if ctx.commit_diffs.is_empty() {
+        json!(null)
+    } else {
+        json!(ctx
+            .commit_diffs
+            .iter()
+            .map(|(sha, diff)| json!({"sha": sha, "diff": diff}))
+            .collect::<Vec<_>>())
+    };
+
     let output = json!({
-        "source": commit_info.map(|info| json!({
+        "source": ctx.commit_info.as_ref().map(|info| json!({
             "sha": info.sha,
             "author": info.author,
             "date": info.date,
-            "message": info.message
+            "message": info.message,
+            "full_message": info.full_message
         })),
+        "commit_diffs": commit_diffs_json,
+        "project_context": ctx.project_context,
+        "git_status": ctx.git_status,
         "prompts": prompts_json
     });
 
