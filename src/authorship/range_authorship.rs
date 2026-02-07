@@ -263,25 +263,30 @@ fn create_authorship_log_for_range(
     }
 
     // Step 2: Create VirtualAttributions for start commit (older)
+    // Pass start_sha as blame_start_commit to limit blame scope to the range,
+    // avoiding expensive traversal of the entire repository history
     let repo_clone = repo.clone();
+    let start_sha_limit = Some(start_sha.to_string());
     let mut start_va = smol::block_on(async {
         VirtualAttributions::new_for_base_commit(
             repo_clone,
             start_sha.to_string(),
             &changed_files,
-            None,
+            start_sha_limit,
         )
         .await
     })?;
 
     // Step 3: Create VirtualAttributions for end commit (newer)
+    // Pass start_sha as blame_start_commit to limit blame scope to the range
     let repo_clone = repo.clone();
+    let start_sha_limit = Some(start_sha.to_string());
     let mut end_va = smol::block_on(async {
         VirtualAttributions::new_for_base_commit(
             repo_clone,
             end_sha.to_string(),
             &changed_files,
-            None,
+            start_sha_limit,
         )
         .await
     })?;
