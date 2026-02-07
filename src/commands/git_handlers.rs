@@ -116,7 +116,9 @@ pub fn handle_git(args: &[String]) {
         );
     }
 
-    // Handle clone separately since repo doesn't exist before the command
+    // Handle clone separately since repo doesn't exist before the command.
+    // Note: clone aliases (e.g., alias.cl = clone) won't trigger clone hooks because
+    // alias resolution requires a Repository object, which doesn't exist yet for clone.
     if parsed_args.command.as_deref() == Some("clone") && !parsed_args.is_help && !skip_hooks {
         let exit_status = proxy_to_git(&parsed_args.to_invocation_vec(), false);
         clone_hooks::post_clone_hook(&parsed_args, exit_status);
@@ -137,7 +139,9 @@ pub fn handle_git(args: &[String]) {
 
         let repository = repository_option.as_mut().unwrap();
 
-        resolve_alias_invocation(&parsed_args, repository).map(|resolved| parsed_args = resolved);
+        if let Some(resolved) = resolve_alias_invocation(&parsed_args, repository) {
+            parsed_args = resolved;
+        }
 
         let pre_command_start = Instant::now();
         run_pre_command_hooks(&mut command_hooks_context, &mut parsed_args, repository);
@@ -171,16 +175,24 @@ pub fn handle_git(args: &[String]) {
     exit_with_status(exit_status);
 }
 
-/// Public wrapper for testing
-pub fn resolve_alias_invocation_test(
+/// Handle alias invocations
+#[cfg(feature = "test-support")]
+pub fn resolve_alias_invocation(
     parsed_args: &ParsedGitInvocation,
     repository: &Repository,
 ) -> Option<ParsedGitInvocation> {
-    resolve_alias_invocation(&parsed_args, repository)
+    resolve_alias_impl(parsed_args, repository)
 }
 
-/// Handle alias invocations
+#[cfg(not(feature = "test-support"))]
 fn resolve_alias_invocation(
+    parsed_args: &ParsedGitInvocation,
+    repository: &Repository,
+) -> Option<ParsedGitInvocation> {
+    resolve_alias_impl(parsed_args, repository)
+}
+
+fn resolve_alias_impl(
     parsed_args: &ParsedGitInvocation,
     repository: &Repository,
 ) -> Option<ParsedGitInvocation> {
@@ -220,7 +232,7 @@ fn resolve_alias_invocation(
 fn parse_alias_tokens(value: &str) -> Option<Vec<String>> {
     let trimmed = value.trim_start();
 
-    // If alias starts with '!', it's a shell command,currently proxy to git
+    // If alias starts with '!', it's a shell command, currently proxy to git
     if trimmed.starts_with('!') {
         return None;
     }
@@ -597,4 +609,107 @@ fn in_shell_completion_context() -> bool {
     std::env::var("COMP_LINE").is_ok()
         || std::env::var("COMP_POINT").is_ok()
         || std::env::var("COMP_TYPE").is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_alias_tokens;
+
+    #[test]
+    fn parse_alias_tokens_empty_string() {
+        assert_eq!(parse_alias_tokens(""), Some(vec![]));
+    }
+
+    #[test]
+    fn parse_alias_tokens_whitespace_only() {
+        assert_eq!(parse_alias_tokens("  \t  "), Some(vec![]));
+    }
+
+    #[test]
+    fn parse_alias_tokens_shell_alias() {
+        assert_eq!(parse_alias_tokens("!echo hello"), None);
+    }
+
+    #[test]
+    fn parse_alias_tokens_shell_alias_with_leading_whitespace() {
+        assert_eq!(parse_alias_tokens("  !echo hello"), None);
+    }
+
+    #[test]
+    fn parse_alias_tokens_simple_tokens() {
+        assert_eq!(
+            parse_alias_tokens("commit -v"),
+            Some(vec!["commit".to_string(), "-v".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_alias_tokens_double_quotes() {
+        assert_eq!(
+            parse_alias_tokens(r#"log "--format=%H %s""#),
+            Some(vec!["log".to_string(), "--format=%H %s".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_alias_tokens_single_quotes() {
+        assert_eq!(
+            parse_alias_tokens("log '--format=%H %s'"),
+            Some(vec!["log".to_string(), "--format=%H %s".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_alias_tokens_mixed_adjacent_quotes() {
+        assert_eq!(
+            parse_alias_tokens("--pretty='format:%h %s'"),
+            Some(vec!["--pretty=format:%h %s".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_alias_tokens_unclosed_single_quote() {
+        assert_eq!(parse_alias_tokens("log 'unclosed"), None);
+    }
+
+    #[test]
+    fn parse_alias_tokens_unclosed_double_quote() {
+        assert_eq!(parse_alias_tokens("log \"unclosed"), None);
+    }
+
+    #[test]
+    fn parse_alias_tokens_escaped_char_outside_quotes() {
+        assert_eq!(
+            parse_alias_tokens(r"log \-\-oneline"),
+            Some(vec!["log".to_string(), "--oneline".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_alias_tokens_escaped_char_in_double_quotes() {
+        assert_eq!(
+            parse_alias_tokens(r#"log "--format=\"%H\"""#),
+            Some(vec!["log".to_string(), "--format=\"%H\"".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_alias_tokens_trailing_backslash() {
+        assert_eq!(
+            parse_alias_tokens("commit\\"),
+            Some(vec!["commit\\".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_alias_tokens_multiple_whitespace_between_tokens() {
+        assert_eq!(
+            parse_alias_tokens("log   --oneline   -5"),
+            Some(vec![
+                "log".to_string(),
+                "--oneline".to_string(),
+                "-5".to_string()
+            ])
+        );
+    }
 }
