@@ -22,11 +22,7 @@ fn read_remote_authorship_note(repo: &TestRepo, commit_sha: &str) -> Option<Stri
 
     if output.status.success() {
         let note = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if note.is_empty() {
-            None
-        } else {
-            Some(note)
-        }
+        if note.is_empty() { None } else { Some(note) }
     } else {
         None
     }
