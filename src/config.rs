@@ -1113,7 +1113,6 @@ mod tests {
             quiet: false,
         }
     }
-    }
 
     #[test]
     fn test_effective_prompt_storage_no_include_list_uses_global() {
