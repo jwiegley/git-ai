@@ -213,20 +213,13 @@ impl PartialOrd for PromptRecord {
 
 impl Ord for PromptRecord {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Sort oldest to newest based on messages, additions, or deletions
-        if self.messages.len() > other.messages.len()
-            || self.total_additions > other.total_additions
-            || self.total_deletions > other.total_deletions
-        {
-            std::cmp::Ordering::Greater // self is newer
-        } else if other.messages.len() > self.messages.len()
-            || other.total_additions > self.total_additions
-            || other.total_deletions > self.total_deletions
-        {
-            std::cmp::Ordering::Less // other is newer
-        } else {
-            std::cmp::Ordering::Equal
-        }
+        // Sort oldest to newest based on messages, additions, or deletions.
+        // Uses lexicographic comparison to ensure a valid total ordering.
+        self.messages
+            .len()
+            .cmp(&other.messages.len())
+            .then_with(|| self.total_additions.cmp(&other.total_additions))
+            .then_with(|| self.total_deletions.cmp(&other.total_deletions))
     }
 }
 
