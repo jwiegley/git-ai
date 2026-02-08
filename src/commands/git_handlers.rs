@@ -38,10 +38,10 @@ use std::time::Instant;
 #[cfg(unix)]
 static CHILD_PGID: AtomicI32 = AtomicI32::new(0);
 
-// Windows NTSTATUS for Ctrl+C termination (STATUS_CONTROL_C_EXIT).
+// Windows NTSTATUS for Ctrl+C termination (STATUS_CONTROL_C_EXIT) from winerror.h.
 #[cfg(windows)]
 const NTSTATUS_CONTROL_C_EXIT: u32 = 0xC000013A;
-// ExitStatus::code uses i32, so store the NTSTATUS value as an i32 for comparisons.
+// ExitStatus::code uses i32, so cast to the signed value (0xC000013A as i32 = -1073741510).
 #[cfg(windows)]
 const NTSTATUS_CONTROL_C_EXIT_CODE: i32 = NTSTATUS_CONTROL_C_EXIT as i32;
 
