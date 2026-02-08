@@ -1695,31 +1695,30 @@ impl GithubCopilotPreset {
                     Some(k) => k,
                     None => continue,
                 };
-                if kind == 1 || kind == 2 {
-                    if let (Some(key_path), Some(value)) =
+                if (kind == 1 || kind == 2)
+                    && let (Some(key_path), Some(value)) =
                         (patch.get("k").and_then(|v| v.as_array()), patch.get("v"))
-                    {
-                        // Walk the key path on session_json, setting the value at the leaf
-                        let keys: Vec<String> = key_path
-                            .iter()
-                            .filter_map(|k| k.as_str().map(|s| s.to_string()))
-                            .collect();
-                        if !keys.is_empty() {
-                            // Use pointer-based indexing to find the parent, then insert at leaf
-                            let json_pointer = if keys.len() == 1 {
-                                String::new()
-                            } else {
-                                format!("/{}", keys[..keys.len() - 1].join("/"))
-                            };
-                            let leaf_key = &keys[keys.len() - 1];
-                            let parent = if json_pointer.is_empty() {
-                                Some(&mut session_json)
-                            } else {
-                                session_json.pointer_mut(&json_pointer)
-                            };
-                            if let Some(obj) = parent.and_then(|p| p.as_object_mut()) {
-                                obj.insert(leaf_key.clone(), value.clone());
-                            }
+                {
+                    // Walk the key path on session_json, setting the value at the leaf
+                    let keys: Vec<String> = key_path
+                        .iter()
+                        .filter_map(|k| k.as_str().map(|s| s.to_string()))
+                        .collect();
+                    if !keys.is_empty() {
+                        // Use pointer-based indexing to find the parent, then insert at leaf
+                        let json_pointer = if keys.len() == 1 {
+                            String::new()
+                        } else {
+                            format!("/{}", keys[..keys.len() - 1].join("/"))
+                        };
+                        let leaf_key = &keys[keys.len() - 1];
+                        let parent = if json_pointer.is_empty() {
+                            Some(&mut session_json)
+                        } else {
+                            session_json.pointer_mut(&json_pointer)
+                        };
+                        if let Some(obj) = parent.and_then(|p| p.as_object_mut()) {
+                            obj.insert(leaf_key.clone(), value.clone());
                         }
                     }
                 }
