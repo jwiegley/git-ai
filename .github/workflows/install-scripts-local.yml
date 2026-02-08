@@ -88,8 +88,11 @@ jobs:
         run: |
           $testHome = Join-Path $env:RUNNER_TEMP "git-ai-home"
           New-Item -ItemType Directory -Force -Path $testHome | Out-Null
-          Add-Content -Path $env:GITHUB_ENV -Value "HOME=$testHome"
-          Add-Content -Path $env:GITHUB_ENV -Value "USERPROFILE=$testHome"
+          $homeDrive = [System.IO.Path]::GetPathRoot($testHome).TrimEnd('\')
+          $homePath = $testHome.Substring($homeDrive.Length)
+          Add-Content -Path $env:GITHUB_ENV -Value "TEST_HOME=$testHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "TEST_HOME_DRIVE=$homeDrive"
+          Add-Content -Path $env:GITHUB_ENV -Value "TEST_HOME_PATH=$homePath"
 
           $claudeDir = Join-Path $testHome ".claude"
           New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
@@ -104,14 +107,23 @@ jobs:
         shell: pwsh
         env:
           GIT_AI_LOCAL_BINARY: ${{ github.workspace }}\target\release\git-ai.exe
+          HOME: ${{ env.TEST_HOME }}
+          USERPROFILE: ${{ env.TEST_HOME }}
+          HOMEDRIVE: ${{ env.TEST_HOME_DRIVE }}
+          HOMEPATH: ${{ env.TEST_HOME_PATH }}
         run: |
           Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
           ./install.ps1
 
       - name: Verify Claude hooks
         shell: pwsh
+        env:
+          HOME: ${{ env.TEST_HOME }}
+          USERPROFILE: ${{ env.TEST_HOME }}
+          HOMEDRIVE: ${{ env.TEST_HOME_DRIVE }}
+          HOMEPATH: ${{ env.TEST_HOME_PATH }}
         run: |
-          $installDir = Join-Path $env:HOME ".git-ai\bin"
+          $installDir = Join-Path $env:USERPROFILE ".git-ai\bin"
           if (-not (Test-Path -LiteralPath (Join-Path $installDir "git-ai.exe"))) { throw "git-ai.exe not installed" }
-          $settings = Join-Path $env:HOME ".claude\settings.json"
+          $settings = Join-Path $env:USERPROFILE ".claude\settings.json"
           if (-not (Select-String -Path $settings -Pattern "checkpoint claude")) { throw "Claude hooks not configured" }
