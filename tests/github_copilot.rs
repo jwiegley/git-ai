@@ -1001,11 +1001,9 @@ fn copilot_session_parsing_multiline_jsonl() {
     );
 
     // The assistant response text contains "7sadfh32u23gdaWF"
-    assert!(
-        tx.messages
-            .iter()
-            .any(|m| matches!(m, Message::Assistant { text, .. } if text.contains("7sadfh32u23gdaWF")))
-    );
+    assert!(tx.messages.iter().any(
+        |m| matches!(m, Message::Assistant { text, .. } if text.contains("7sadfh32u23gdaWF"))
+    ));
 
     // Model from patched request's modelId
     assert_eq!(model, Some("copilot/gpt-4o".to_string()));
