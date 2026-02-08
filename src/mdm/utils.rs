@@ -107,28 +107,41 @@ pub fn is_github_codespaces() -> bool {
 
 /// Get the user's home directory
 pub fn home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home);
-        }
-    }
-
-    if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        if !userprofile.is_empty() {
-            return PathBuf::from(userprofile);
-        }
-    }
-
     #[cfg(windows)]
-    if let (Ok(home_drive), Ok(home_path)) =
-        (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
     {
-        if !home_drive.is_empty() && !home_path.is_empty() {
-            return PathBuf::from(format!("{}{}", home_drive, home_path));
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            if !userprofile.is_empty() {
+                return PathBuf::from(userprofile);
+            }
         }
+
+        if let (Ok(home_drive), Ok(home_path)) =
+            (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH"))
+        {
+            if !home_drive.is_empty() && !home_path.is_empty() {
+                return PathBuf::from(format!("{}{}", home_drive, home_path));
+            }
+        }
+
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() {
+                return PathBuf::from(home);
+            }
+        }
+
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     }
 
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+    #[cfg(not(windows))]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() {
+                return PathBuf::from(home);
+            }
+        }
+
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 /// Write data to a file atomically (write to temp, then rename)

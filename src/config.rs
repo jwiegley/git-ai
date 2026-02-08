@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::feature_flags::FeatureFlags;
 use crate::git::repository::Repository;
+use crate::mdm::utils::home_dir;
 
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::RwLock;
@@ -681,8 +682,7 @@ fn load_file_config() -> Option<FileConfig> {
 }
 
 fn config_file_path() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    Some(home.join(".git-ai").join("config.json"))
+    Some(home_dir().join(".git-ai").join("config.json"))
 }
 
 /// Public accessor for config file path
@@ -693,16 +693,7 @@ pub fn config_file_path_public() -> Option<PathBuf> {
 
 /// Returns the path to the git-ai base directory (~/.git-ai)
 pub fn git_ai_dir_path() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        let home = env::var("USERPROFILE").ok()?;
-        Some(Path::new(&home).join(".git-ai"))
-    }
-    #[cfg(not(windows))]
-    {
-        let home = env::var("HOME").ok()?;
-        Some(Path::new(&home).join(".git-ai"))
-    }
+    Some(home_dir().join(".git-ai"))
 }
 
 /// Returns the path to the internal state directory (~/.git-ai/internal)
