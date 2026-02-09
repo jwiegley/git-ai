@@ -1286,16 +1286,16 @@ impl Repository {
             }
         };
 
-        // Build: git log --format=%H --reverse --ancestry-path <branch> --not <other branches>
-        // --ancestry-path narrows the output to only commits that are ancestors of <branch>
-        // AND descendants of the excluded commits (<merge_target>). This filters out commits
-        // brought in by merging the merge target INTO the branch (e.g. "merge main into feature"
-        // to stay up-to-date), keeping only the commits that were directly authored on the branch.
+        // Build: git log --format=%H --reverse <branch> --not <merge_target>
+        // Note: we intentionally do NOT use --ancestry-path here. That flag requires
+        // commits to be descendants of the merge-target's tip, which fails when the
+        // merge target was previously merged INTO the branch (a common workflow to
+        // stay up-to-date). In that case, the branch's unique commits descend from
+        // the pre-merge side and --ancestry-path filters them all out.
         let mut log_args = self.global_args_for_exec();
         log_args.push("log".to_string());
         log_args.push("--format=%H".to_string());
         log_args.push("--reverse".to_string());
-        log_args.push("--ancestry-path".to_string());
         log_args.push(fq_branch.to_string());
         log_args.push("--not".to_string());
         log_args.push(fq_merge_target.to_string());
