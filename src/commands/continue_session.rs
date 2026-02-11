@@ -1056,42 +1056,54 @@ fn format_context_block(ctx: &SessionContext) -> String {
 fn format_context_json(ctx: &SessionContext) -> String {
     use serde_json::json;
 
+    let max_messages = ctx.max_messages;
     let prompts_json: Vec<serde_json::Value> = ctx
         .prompts
         .iter()
         .map(|(id, prompt)| {
+            let non_tool: Vec<_> = prompt
+                .messages
+                .iter()
+                .filter(|m| !matches!(m, Message::ToolUse { .. }))
+                .collect();
+            let to_show = if non_tool.len() > max_messages {
+                &non_tool[non_tool.len() - max_messages..]
+            } else {
+                &non_tool
+            };
+            let messages_json: Vec<serde_json::Value> = to_show
+                .iter()
+                .map(|m| match m {
+                    Message::User { text, timestamp } => json!({
+                        "role": "user",
+                        "text": text,
+                        "timestamp": timestamp
+                    }),
+                    Message::Assistant { text, timestamp } => json!({
+                        "role": "assistant",
+                        "text": text,
+                        "timestamp": timestamp
+                    }),
+                    Message::Thinking { text, timestamp } => json!({
+                        "role": "thinking",
+                        "text": text,
+                        "timestamp": timestamp
+                    }),
+                    Message::Plan { text, timestamp } => json!({
+                        "role": "plan",
+                        "text": text,
+                        "timestamp": timestamp
+                    }),
+                    Message::ToolUse { .. } => json!(null),
+                })
+                .filter(|v| !v.is_null())
+                .collect();
             json!({
                 "id": id,
                 "tool": prompt.agent_id.tool,
                 "model": prompt.agent_id.model,
                 "author": prompt.human_author,
-                "messages": prompt.messages.iter()
-                    .filter(|m| !matches!(m, Message::ToolUse { .. }))
-                    .map(|m| match m {
-                        Message::User { text, timestamp } => json!({
-                            "role": "user",
-                            "text": text,
-                            "timestamp": timestamp
-                        }),
-                        Message::Assistant { text, timestamp } => json!({
-                            "role": "assistant",
-                            "text": text,
-                            "timestamp": timestamp
-                        }),
-                        Message::Thinking { text, timestamp } => json!({
-                            "role": "thinking",
-                            "text": text,
-                            "timestamp": timestamp
-                        }),
-                        Message::Plan { text, timestamp } => json!({
-                            "role": "plan",
-                            "text": text,
-                            "timestamp": timestamp
-                        }),
-                        Message::ToolUse { .. } => json!(null),
-                    })
-                    .filter(|v| !v.is_null())
-                    .collect::<Vec<_>>()
+                "messages": messages_json
             })
         })
         .collect();
