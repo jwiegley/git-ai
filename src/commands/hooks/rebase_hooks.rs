@@ -38,11 +38,15 @@ pub fn pre_rebase_hook(
         // Starting a new rebase - capture original HEAD and log Start event
         if let Ok(head) = repository.head() {
             if let Ok(target) = head.target() {
-                debug_log(&format!("Starting new rebase from HEAD: {}", target));
-                command_hooks_context.rebase_original_head = Some(target.clone());
+                let original_head = resolve_rebase_original_head(parsed_args, repository)
+                    .unwrap_or_else(|| target.clone());
                 let onto_head = resolve_rebase_onto_head(parsed_args, repository);
+                debug_log(&format!(
+                    "Starting new rebase from HEAD: {} (resolved original_head: {}, onto: {:?})",
+                    target, original_head, onto_head
+                ));
+                command_hooks_context.rebase_original_head = Some(original_head.clone());
                 command_hooks_context.rebase_onto = onto_head.clone();
-                debug_log(&format!("Rebase onto target: {:?}", onto_head));
 
                 // Determine if interactive
                 let is_interactive = parsed_args.has_command_flag("-i")
@@ -53,7 +57,7 @@ pub fn pre_rebase_hook(
                 // Log the rebase start event
                 let start_event = RewriteLogEvent::rebase_start(
                     crate::git::rewrite_log::RebaseStartEvent::new_with_onto(
-                        target.clone(),
+                        original_head,
                         is_interactive,
                         onto_head,
                     ),
@@ -111,10 +115,10 @@ pub fn handle_rebase_post_command(
     let original_head_from_log = start_event_from_log
         .as_ref()
         .map(|event| event.original_head.clone());
+    let onto_head_from_context = context.rebase_onto.clone();
     let onto_head_from_log = start_event_from_log
         .as_ref()
         .and_then(|event| event.onto_head.clone());
-    let onto_head_from_context = context.rebase_onto.clone();
 
     debug_log(&format!(
         "Original head: context={:?}, log={:?}; onto: context={:?}, log={:?}",
@@ -325,8 +329,8 @@ pub(crate) fn build_rebase_commit_mappings(
     let mut original_commits = walk_commits_to_base(repository, original_head, &merge_base)?;
     original_commits.reverse();
 
-    // Fast path: if there were no original commits, there is nothing to rewrite and no need
-    // to walk potentially large parts of new history.
+    // If there were no original commits, there is nothing to rewrite.
+    // Avoid walking potentially large parts of new history.
     if original_commits.is_empty() {
         debug_log(&format!(
             "Commit mapping: 0 original -> 0 new (merge_base: {})",
@@ -335,16 +339,16 @@ pub(crate) fn build_rebase_commit_mappings(
         return Ok((original_commits, Vec::new()));
     }
 
-    // Prefer the resolved rebase target (onto) as the lower bound for new commits.
-    // This avoids sweeping unrelated target-branch history in skipped/no-op rebases.
+    // Prefer the rebase target (onto) as the lower bound for new commits. This prevents
+    // skipped/no-op rebases from sweeping unrelated target-branch history.
     let new_commits_base = onto_head
         .filter(|onto| is_ancestor(repository, onto, new_head))
         .unwrap_or(merge_base.as_str());
 
-    // Walk from new_head to base to get actual rebased commits.
+    // Walk from new_head to base to get the actual rebased commits
     let mut new_commits = walk_commits_to_base(repository, new_head, new_commits_base)?;
 
-    // Reverse both so they're in chronological order (oldest first)
+    // Reverse so they're in chronological order (oldest first)
     new_commits.reverse();
 
     debug_log(&format!(
@@ -360,69 +364,46 @@ pub(crate) fn build_rebase_commit_mappings(
     Ok((original_commits, new_commits))
 }
 
+fn resolve_rebase_original_head(
+    parsed_args: &ParsedGitInvocation,
+    repository: &Repository,
+) -> Option<String> {
+    let summary = summarize_rebase_args(parsed_args);
+    if summary.is_control_mode {
+        return None;
+    }
+
+    // Branch selection rules:
+    // - `git rebase <upstream> <branch>` -> second positional
+    // - `git rebase --root <branch>` -> first positional
+    let branch_idx = if summary.has_root { 0 } else { 1 };
+    let branch_spec = summary.positionals.get(branch_idx)?;
+    resolve_commitish(repository, branch_spec)
+}
+
 fn resolve_rebase_onto_head(
     parsed_args: &ParsedGitInvocation,
     repository: &Repository,
 ) -> Option<String> {
-    // These modes do not start a new rebase sequence.
-    for mode in [
-        "--continue",
-        "--abort",
-        "--skip",
-        "--quit",
-        "--show-current-patch",
-    ] {
-        if parsed_args.has_command_flag(mode) {
-            return None;
-        }
+    let summary = summarize_rebase_args(parsed_args);
+    if summary.is_control_mode {
+        return None;
     }
 
-    let args = &parsed_args.command_args;
-    let mut first_positional: Option<&str> = None;
-    let mut i = 0usize;
-
-    while i < args.len() {
-        let arg = args[i].as_str();
-
-        if arg == "--" {
-            break;
-        }
-
-        if arg == "--onto" {
-            if i + 1 < args.len() {
-                return resolve_commitish(repository, &args[i + 1]);
-            }
-            return None;
-        }
-        if let Some(spec) = arg.strip_prefix("--onto=") {
-            return resolve_commitish(repository, spec);
-        }
-
-        if arg.starts_with('-') {
-            // Subset of rebase flags that consume a separate value token.
-            let takes_value = matches!(
-                arg,
-                "-s" | "--strategy" | "-X" | "--strategy-option" | "-x" | "--exec" | "--empty"
-            );
-            if takes_value && !arg.contains('=') {
-                i += 2;
-                continue;
-            }
-            i += 1;
-            continue;
-        }
-
-        if first_positional.is_none() {
-            first_positional = Some(arg);
-        }
-        i += 1;
+    if let Some(onto_spec) = summary.onto_spec {
+        return resolve_commitish(repository, &onto_spec);
     }
 
-    if let Some(upstream) = first_positional {
-        return resolve_commitish(repository, upstream);
+    // `--root` mode has no implicit upstream bound unless `--onto` is provided.
+    if summary.has_root {
+        return None;
     }
 
-    // `git rebase` with no explicit upstream uses branch upstream config.
+    if let Some(upstream_spec) = summary.positionals.first() {
+        return resolve_commitish(repository, upstream_spec);
+    }
+
+    // `git rebase` with no explicit upstream uses the current branch upstream.
     resolve_commitish(repository, "@{upstream}")
 }
 
@@ -441,4 +422,97 @@ fn is_ancestor(repository: &Repository, ancestor: &str, descendant: &str) -> boo
     args.push(ancestor.to_string());
     args.push(descendant.to_string());
     crate::git::repository::exec_git(&args).is_ok()
+}
+
+struct RebaseArgsSummary {
+    is_control_mode: bool,
+    has_root: bool,
+    onto_spec: Option<String>,
+    positionals: Vec<String>,
+}
+
+fn summarize_rebase_args(parsed_args: &ParsedGitInvocation) -> RebaseArgsSummary {
+    // Modes that do not start a new rebase sequence.
+    for mode in [
+        "--continue",
+        "--abort",
+        "--skip",
+        "--quit",
+        "--show-current-patch",
+    ] {
+        if parsed_args.has_command_flag(mode) {
+            return RebaseArgsSummary {
+                is_control_mode: true,
+                has_root: false,
+                onto_spec: None,
+                positionals: Vec::new(),
+            };
+        }
+    }
+
+    let mut has_root = false;
+    let mut onto_spec: Option<String> = None;
+    let mut positionals: Vec<String> = Vec::new();
+    let args = &parsed_args.command_args;
+    let mut i = 0usize;
+
+    while i < args.len() {
+        let arg = args[i].as_str();
+
+        if arg == "--" {
+            break;
+        }
+
+        if arg == "--onto" {
+            if let Some(next) = args.get(i + 1) {
+                onto_spec = Some(next.clone());
+                i += 2;
+                continue;
+            }
+            break;
+        }
+        if let Some(spec) = arg.strip_prefix("--onto=") {
+            onto_spec = Some(spec.to_string());
+            i += 1;
+            continue;
+        }
+
+        if arg == "--root" {
+            has_root = true;
+            i += 1;
+            continue;
+        }
+
+        if arg.starts_with('-') {
+            // Subset of rebase flags that consume a separate value token.
+            let takes_value = matches!(
+                arg,
+                "-s" | "--strategy"
+                    | "-X"
+                    | "--strategy-option"
+                    | "-x"
+                    | "--exec"
+                    | "--empty"
+                    | "-C"
+                    | "-S"
+                    | "--gpg-sign"
+            );
+            if takes_value && !arg.contains('=') {
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        positionals.push(arg.to_string());
+        i += 1;
+    }
+
+    RebaseArgsSummary {
+        is_control_mode: false,
+        has_root,
+        onto_spec,
+        positionals,
+    }
 }
