@@ -542,7 +542,7 @@ pub fn handle_continue(args: &[String]) {
                 println!("{}", output);
             }
         }
-    } else if parsed.options.launch || std::io::stdout().is_terminal() {
+    } else if !parsed.options.json && (parsed.options.launch || std::io::stdout().is_terminal()) {
         // Launch agent by default when output is a terminal
         match launch_agent(parsed.options.agent_name(), &output, parsed.options.summary) {
             Ok(()) => {}

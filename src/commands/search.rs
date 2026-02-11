@@ -589,7 +589,7 @@ fn format_default(result: &SearchResult, mode: &SearchMode) -> String {
             && let Some(text) = first_msg.text()
         {
             let snippet: String = text.chars().take(80).collect();
-            let ellipsis = if text.len() > 80 { "..." } else { "" };
+            let ellipsis = if text.chars().count() > 80 { "..." } else { "" };
             output.push_str(&format!("    First message: {}{}\n", snippet, ellipsis));
         }
 
