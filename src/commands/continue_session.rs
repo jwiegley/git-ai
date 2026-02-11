@@ -394,8 +394,12 @@ fn handle_continue_tui(repo: &Repository, options: &ContinueOptions) {
     // Gather all session context (TUI mode has no commit_info)
     let ctx = gather_session_context(repo, result, None, options);
 
-    // Format context block
-    let context = format_context_block(&ctx);
+    // Format context using the requested output mode
+    let context = if options.json {
+        format_context_json(&ctx)
+    } else {
+        format_context_block(&ctx)
+    };
 
     // Execute the chosen action
     match choice {
