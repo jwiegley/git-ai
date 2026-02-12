@@ -716,6 +716,84 @@ mod tests {
     }
 
     #[test]
+    fn test_count_line_ranges_single_element() {
+        assert_eq!(count_line_ranges(&[42]), 1);
+    }
+
+    #[test]
+    fn test_count_line_ranges_all_contiguous() {
+        assert_eq!(count_line_ranges(&[1, 2, 3, 4, 5]), 1);
+    }
+
+    #[test]
+    fn test_count_line_ranges_all_scattered() {
+        assert_eq!(count_line_ranges(&[1, 10, 20, 30]), 4);
+    }
+
+    #[test]
+    fn test_count_line_ranges_duplicates() {
+        assert_eq!(count_line_ranges(&[5, 5, 5]), 1);
+    }
+
+    #[test]
+    fn test_count_line_ranges_unsorted() {
+        // After sort+dedup: [1, 2, 5, 6, 10] -> ranges: [1,2], [5,6], [10]
+        assert_eq!(count_line_ranges(&[10, 5, 6, 1, 2]), 3);
+    }
+
+    #[test]
+    fn test_count_line_ranges_two_ranges() {
+        assert_eq!(count_line_ranges(&[1, 2, 3, 10, 11, 12]), 2);
+    }
+
+    #[test]
+    fn test_should_skip_stats_exactly_at_thresholds() {
+        // Exactly at the hunks threshold alone should trigger skip.
+        let at_hunks = StatsCostEstimate {
+            files_with_additions: 0,
+            added_lines: 0,
+            hunk_ranges: STATS_SKIP_MAX_HUNKS,
+        };
+        assert!(
+            should_skip_expensive_post_commit_stats(&at_hunks),
+            "Exactly at hunk threshold should skip"
+        );
+
+        // Exactly at added-lines threshold alone should trigger skip.
+        let at_added = StatsCostEstimate {
+            files_with_additions: 0,
+            added_lines: STATS_SKIP_MAX_ADDED_LINES,
+            hunk_ranges: 0,
+        };
+        assert!(
+            should_skip_expensive_post_commit_stats(&at_added),
+            "Exactly at added-lines threshold should skip"
+        );
+
+        // Exactly at files-with-additions threshold alone should trigger skip.
+        let at_files = StatsCostEstimate {
+            files_with_additions: STATS_SKIP_MAX_FILES_WITH_ADDITIONS,
+            added_lines: 0,
+            hunk_ranges: 0,
+        };
+        assert!(
+            should_skip_expensive_post_commit_stats(&at_files),
+            "Exactly at files-with-additions threshold should skip"
+        );
+
+        // All at zero should NOT skip.
+        let all_zero = StatsCostEstimate {
+            files_with_additions: 0,
+            added_lines: 0,
+            hunk_ranges: 0,
+        };
+        assert!(
+            !should_skip_expensive_post_commit_stats(&all_zero),
+            "All zero values should not skip"
+        );
+    }
+
+    #[test]
     fn test_post_commit_utf8_filename_with_ai_attribution() {
         // Create a repo with an initial commit
         let tmp_repo = TmpRepo::new().unwrap();

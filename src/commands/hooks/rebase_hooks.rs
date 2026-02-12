@@ -516,3 +516,102 @@ fn summarize_rebase_args(parsed_args: &ParsedGitInvocation) -> RebaseArgsSummary
         positionals,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::cli_parser::ParsedGitInvocation;
+
+    /// Build a `ParsedGitInvocation` whose `command` is "rebase" and whose
+    /// `command_args` are the supplied strings.
+    fn make_rebase_invocation(args: &[&str]) -> ParsedGitInvocation {
+        ParsedGitInvocation {
+            global_args: Vec::new(),
+            command: Some("rebase".to_string()),
+            command_args: args.iter().map(|s| s.to_string()).collect(),
+            saw_end_of_opts: false,
+            is_help: false,
+        }
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_continue_is_control_mode() {
+        let parsed = make_rebase_invocation(&["--continue"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(summary.is_control_mode);
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_abort_is_control_mode() {
+        let parsed = make_rebase_invocation(&["--abort"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(summary.is_control_mode);
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_skip_is_control_mode() {
+        let parsed = make_rebase_invocation(&["--skip"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(summary.is_control_mode);
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_upstream_only() {
+        let parsed = make_rebase_invocation(&["origin/main"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(!summary.is_control_mode);
+        assert_eq!(summary.positionals, vec!["origin/main".to_string()]);
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_upstream_and_branch() {
+        let parsed = make_rebase_invocation(&["origin/main", "feature"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(!summary.is_control_mode);
+        assert_eq!(
+            summary.positionals,
+            vec!["origin/main".to_string(), "feature".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_onto_flag() {
+        let parsed = make_rebase_invocation(&["--onto", "abc123", "origin/main"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(!summary.is_control_mode);
+        assert_eq!(summary.onto_spec, Some("abc123".to_string()));
+        assert_eq!(summary.positionals, vec!["origin/main".to_string()]);
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_onto_equals_flag() {
+        let parsed = make_rebase_invocation(&["--onto=abc123", "origin/main"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(!summary.is_control_mode);
+        assert_eq!(summary.onto_spec, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_root_flag() {
+        let parsed = make_rebase_invocation(&["--root"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(!summary.is_control_mode);
+        assert!(summary.has_root);
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_interactive_with_upstream() {
+        let parsed = make_rebase_invocation(&["-i", "origin/main"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(!summary.is_control_mode);
+        assert_eq!(summary.positionals, vec!["origin/main".to_string()]);
+    }
+
+    #[test]
+    fn test_summarize_rebase_args_strategy_consumes_value() {
+        let parsed = make_rebase_invocation(&["-s", "ours", "origin/main"]);
+        let summary = summarize_rebase_args(&parsed);
+        assert!(!summary.is_control_mode);
+        assert_eq!(summary.positionals, vec!["origin/main".to_string()]);
+    }
+}

@@ -374,6 +374,83 @@ notify = ["notify-send", "Codex"]
     }
 
     #[test]
+    fn test_parse_config_toml_malformed() {
+        let result = CodexInstaller::parse_config_toml("invalid [[ toml");
+        assert!(result.is_err(), "Malformed TOML should return Err");
+    }
+
+    #[test]
+    fn test_parse_config_toml_non_table_root() {
+        // A bare integer is a valid TOML value but not a table at root level,
+        // so from_str will fail (TOML requires key-value pairs at the top level).
+        let result = CodexInstaller::parse_config_toml("42");
+        assert!(
+            result.is_err(),
+            "Non-table root value should return Err"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_install_hooks_dry_run() {
+        with_temp_home(|home| {
+            let codex_dir = home.join(".codex");
+            fs::create_dir_all(&codex_dir).unwrap();
+            let config_path = codex_dir.join("config.toml");
+            let original_content = "model = \"gpt-5\"\n";
+            fs::write(&config_path, original_content).unwrap();
+
+            let installer = CodexInstaller;
+            let params = HookInstallerParams {
+                binary_path: test_binary_path(),
+            };
+
+            let diff = installer
+                .install_hooks(&params, true)
+                .expect("dry-run install should succeed");
+            assert!(diff.is_some(), "dry-run should still produce a diff");
+
+            // The file must NOT have been modified.
+            let after = fs::read_to_string(&config_path).unwrap();
+            assert_eq!(
+                after, original_content,
+                "File should remain unchanged after dry-run install"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_install_hooks_idempotent() {
+        with_temp_home(|home| {
+            let codex_dir = home.join(".codex");
+            fs::create_dir_all(&codex_dir).unwrap();
+            let config_path = codex_dir.join("config.toml");
+            fs::write(&config_path, "model = \"gpt-5\"\n").unwrap();
+
+            let installer = CodexInstaller;
+            let params = HookInstallerParams {
+                binary_path: test_binary_path(),
+            };
+
+            // First install (real write).
+            let first = installer
+                .install_hooks(&params, false)
+                .expect("first install should succeed");
+            assert!(first.is_some(), "first install should report changes");
+
+            // Second install should be a no-op.
+            let second = installer
+                .install_hooks(&params, false)
+                .expect("second install should succeed");
+            assert!(
+                second.is_none(),
+                "second install should return None (no changes needed)"
+            );
+        });
+    }
+
+    #[test]
     #[serial]
     fn test_uninstall_hooks_removes_git_ai_notify_entry() {
         with_temp_home(|home| {

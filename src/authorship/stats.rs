@@ -1277,6 +1277,208 @@ mod tests {
         assert_eq!(stats_filtered.ai_additions, 1);
     }
     #[test]
+    fn test_accepted_lines_no_authorship_log() {
+        let added_lines: HashMap<String, Vec<u32>> = HashMap::new();
+        let (accepted, per_tool) = accepted_lines_from_attestations(None, &added_lines, false);
+        assert_eq!(accepted, 0);
+        assert!(per_tool.is_empty());
+    }
+
+    #[test]
+    fn test_accepted_lines_merge_commit() {
+        // Even with a real authorship log, merge commits should short-circuit to (0, empty)
+        let mut log =
+            crate::authorship::authorship_log_serialization::AuthorshipLog::new();
+        let agent_id = crate::authorship::working_log::AgentId {
+            tool: "cursor".to_string(),
+            id: "session_1".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let hash = crate::authorship::authorship_log_serialization::generate_short_hash(
+            &agent_id.id,
+            &agent_id.tool,
+        );
+        log.metadata.prompts.insert(
+            hash.clone(),
+            crate::authorship::authorship_log::PromptRecord {
+                agent_id,
+                human_author: None,
+                messages: vec![],
+                total_additions: 5,
+                total_deletions: 0,
+                accepted_lines: 5,
+                overriden_lines: 0,
+                messages_url: None,
+            },
+        );
+
+        let mut file_att =
+            crate::authorship::authorship_log_serialization::FileAttestation::new(
+                "foo.rs".to_string(),
+            );
+        file_att.add_entry(
+            crate::authorship::authorship_log_serialization::AttestationEntry::new(
+                hash,
+                vec![
+                    crate::authorship::authorship_log::LineRange::Range(1, 3),
+                ],
+            ),
+        );
+        log.attestations.push(file_att);
+
+        let mut added_lines: HashMap<String, Vec<u32>> = HashMap::new();
+        added_lines.insert("foo.rs".to_string(), vec![1, 2, 3]);
+
+        let (accepted, per_tool) =
+            accepted_lines_from_attestations(Some(&log), &added_lines, true);
+        assert_eq!(accepted, 0);
+        assert!(per_tool.is_empty());
+    }
+
+    #[test]
+    fn test_accepted_lines_no_matching_files() {
+        let mut log =
+            crate::authorship::authorship_log_serialization::AuthorshipLog::new();
+        let agent_id = crate::authorship::working_log::AgentId {
+            tool: "cursor".to_string(),
+            id: "session_2".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let hash = crate::authorship::authorship_log_serialization::generate_short_hash(
+            &agent_id.id,
+            &agent_id.tool,
+        );
+        log.metadata.prompts.insert(
+            hash.clone(),
+            crate::authorship::authorship_log::PromptRecord {
+                agent_id,
+                human_author: None,
+                messages: vec![],
+                total_additions: 3,
+                total_deletions: 0,
+                accepted_lines: 3,
+                overriden_lines: 0,
+                messages_url: None,
+            },
+        );
+
+        let mut file_att =
+            crate::authorship::authorship_log_serialization::FileAttestation::new(
+                "foo.rs".to_string(),
+            );
+        file_att.add_entry(
+            crate::authorship::authorship_log_serialization::AttestationEntry::new(
+                hash,
+                vec![
+                    crate::authorship::authorship_log::LineRange::Range(1, 3),
+                ],
+            ),
+        );
+        log.attestations.push(file_att);
+
+        // added_lines has "bar.rs" but NOT "foo.rs"
+        let mut added_lines: HashMap<String, Vec<u32>> = HashMap::new();
+        added_lines.insert("bar.rs".to_string(), vec![1, 2, 3]);
+
+        let (accepted, per_tool) =
+            accepted_lines_from_attestations(Some(&log), &added_lines, false);
+        assert_eq!(accepted, 0);
+        assert!(per_tool.is_empty());
+    }
+
+    #[test]
+    fn test_accepted_lines_basic_match() {
+        let mut log =
+            crate::authorship::authorship_log_serialization::AuthorshipLog::new();
+        let agent_id = crate::authorship::working_log::AgentId {
+            tool: "cursor".to_string(),
+            id: "session_3".to_string(),
+            model: "claude-3-sonnet".to_string(),
+        };
+        let hash = crate::authorship::authorship_log_serialization::generate_short_hash(
+            &agent_id.id,
+            &agent_id.tool,
+        );
+        log.metadata.prompts.insert(
+            hash.clone(),
+            crate::authorship::authorship_log::PromptRecord {
+                agent_id,
+                human_author: None,
+                messages: vec![],
+                total_additions: 3,
+                total_deletions: 0,
+                accepted_lines: 3,
+                overriden_lines: 0,
+                messages_url: None,
+            },
+        );
+
+        let mut file_att =
+            crate::authorship::authorship_log_serialization::FileAttestation::new(
+                "foo.rs".to_string(),
+            );
+        file_att.add_entry(
+            crate::authorship::authorship_log_serialization::AttestationEntry::new(
+                hash.clone(),
+                vec![
+                    crate::authorship::authorship_log::LineRange::Range(1, 3),
+                ],
+            ),
+        );
+        log.attestations.push(file_att);
+
+        let mut added_lines: HashMap<String, Vec<u32>> = HashMap::new();
+        added_lines.insert("foo.rs".to_string(), vec![1, 2, 3]);
+
+        let (accepted, per_tool) =
+            accepted_lines_from_attestations(Some(&log), &added_lines, false);
+        assert_eq!(accepted, 3);
+
+        // Verify per-tool breakdown contains the right key
+        let expected_key = "cursor::claude-3-sonnet".to_string();
+        assert_eq!(per_tool.get(&expected_key), Some(&3));
+    }
+
+    // --- line_range_overlap_len tests ---
+
+    #[test]
+    fn test_overlap_single_hit() {
+        let count = line_range_overlap_len(&LineRange::Single(5), &[3, 5, 7]);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_overlap_single_miss() {
+        let count = line_range_overlap_len(&LineRange::Single(4), &[3, 5, 7]);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_overlap_range_full() {
+        let count = line_range_overlap_len(&LineRange::Range(3, 7), &[3, 4, 5, 6, 7]);
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_overlap_range_partial() {
+        // Range [4, 8] intersected with [3, 5, 7, 9]: only 5 and 7 are in range
+        let count = line_range_overlap_len(&LineRange::Range(4, 8), &[3, 5, 7, 9]);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_overlap_range_miss() {
+        let count = line_range_overlap_len(&LineRange::Range(10, 20), &[1, 2, 3]);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_overlap_range_empty_added() {
+        let count = line_range_overlap_len(&LineRange::Range(1, 10), &[]);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
     fn test_stats_for_merge_commit_skips_ai_acceptance() {
         let tmp_repo = TmpRepo::new().unwrap();
 
