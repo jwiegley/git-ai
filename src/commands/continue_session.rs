@@ -1611,9 +1611,8 @@ mod tests {
     #[test]
     fn test_context_block_with_git_status() {
         let mut ctx = make_session_context();
-        ctx.git_status = Some(
-            "Current branch: main\n\nRecent commits:\nabc1234 Fix bug\n".to_string(),
-        );
+        ctx.git_status =
+            Some("Current branch: main\n\nRecent commits:\nabc1234 Fix bug\n".to_string());
         let output = format_context_block(&ctx);
         assert!(
             output.contains("gitStatus: This is the current state"),
@@ -1676,7 +1675,9 @@ mod tests {
         );
 
         // prompts
-        let prompts = value["prompts"].as_array().expect("prompts should be array");
+        let prompts = value["prompts"]
+            .as_array()
+            .expect("prompts should be array");
         assert_eq!(prompts.len(), 1, "should have 1 prompt");
         assert_eq!(
             prompts[0]["tool"].as_str().unwrap(),
@@ -1712,7 +1713,9 @@ mod tests {
             "project_context should be null"
         );
         assert!(value["git_status"].is_null(), "git_status should be null");
-        let prompts = value["prompts"].as_array().expect("prompts should be array");
+        let prompts = value["prompts"]
+            .as_array()
+            .expect("prompts should be array");
         assert!(prompts.is_empty(), "prompts should be empty");
     }
 
@@ -1725,8 +1728,7 @@ mod tests {
             "--- a/big.rs\n+++ b/big.rs\n{}\n[... diff truncated at 100KB (150000 bytes total)]",
             "x".repeat(1000)
         );
-        ctx.commit_diffs
-            .insert("deadbeef".to_string(), diff_text);
+        ctx.commit_diffs.insert("deadbeef".to_string(), diff_text);
         let output = format_context_block(&ctx);
         assert!(
             output.contains("diff truncated at 100KB"),

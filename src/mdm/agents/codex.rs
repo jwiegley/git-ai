@@ -384,10 +384,7 @@ notify = ["notify-send", "Codex"]
         // A bare integer is a valid TOML value but not a table at root level,
         // so from_str will fail (TOML requires key-value pairs at the top level).
         let result = CodexInstaller::parse_config_toml("42");
-        assert!(
-            result.is_err(),
-            "Non-table root value should return Err"
-        );
+        assert!(result.is_err(), "Non-table root value should return Err");
     }
 
     #[test]

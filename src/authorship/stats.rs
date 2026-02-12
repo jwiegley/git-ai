@@ -1287,8 +1287,7 @@ mod tests {
     #[test]
     fn test_accepted_lines_merge_commit() {
         // Even with a real authorship log, merge commits should short-circuit to (0, empty)
-        let mut log =
-            crate::authorship::authorship_log_serialization::AuthorshipLog::new();
+        let mut log = crate::authorship::authorship_log_serialization::AuthorshipLog::new();
         let agent_id = crate::authorship::working_log::AgentId {
             tool: "cursor".to_string(),
             id: "session_1".to_string(),
@@ -1312,16 +1311,13 @@ mod tests {
             },
         );
 
-        let mut file_att =
-            crate::authorship::authorship_log_serialization::FileAttestation::new(
-                "foo.rs".to_string(),
-            );
+        let mut file_att = crate::authorship::authorship_log_serialization::FileAttestation::new(
+            "foo.rs".to_string(),
+        );
         file_att.add_entry(
             crate::authorship::authorship_log_serialization::AttestationEntry::new(
                 hash,
-                vec![
-                    crate::authorship::authorship_log::LineRange::Range(1, 3),
-                ],
+                vec![crate::authorship::authorship_log::LineRange::Range(1, 3)],
             ),
         );
         log.attestations.push(file_att);
@@ -1329,16 +1325,14 @@ mod tests {
         let mut added_lines: HashMap<String, Vec<u32>> = HashMap::new();
         added_lines.insert("foo.rs".to_string(), vec![1, 2, 3]);
 
-        let (accepted, per_tool) =
-            accepted_lines_from_attestations(Some(&log), &added_lines, true);
+        let (accepted, per_tool) = accepted_lines_from_attestations(Some(&log), &added_lines, true);
         assert_eq!(accepted, 0);
         assert!(per_tool.is_empty());
     }
 
     #[test]
     fn test_accepted_lines_no_matching_files() {
-        let mut log =
-            crate::authorship::authorship_log_serialization::AuthorshipLog::new();
+        let mut log = crate::authorship::authorship_log_serialization::AuthorshipLog::new();
         let agent_id = crate::authorship::working_log::AgentId {
             tool: "cursor".to_string(),
             id: "session_2".to_string(),
@@ -1362,16 +1356,13 @@ mod tests {
             },
         );
 
-        let mut file_att =
-            crate::authorship::authorship_log_serialization::FileAttestation::new(
-                "foo.rs".to_string(),
-            );
+        let mut file_att = crate::authorship::authorship_log_serialization::FileAttestation::new(
+            "foo.rs".to_string(),
+        );
         file_att.add_entry(
             crate::authorship::authorship_log_serialization::AttestationEntry::new(
                 hash,
-                vec![
-                    crate::authorship::authorship_log::LineRange::Range(1, 3),
-                ],
+                vec![crate::authorship::authorship_log::LineRange::Range(1, 3)],
             ),
         );
         log.attestations.push(file_att);
@@ -1388,8 +1379,7 @@ mod tests {
 
     #[test]
     fn test_accepted_lines_basic_match() {
-        let mut log =
-            crate::authorship::authorship_log_serialization::AuthorshipLog::new();
+        let mut log = crate::authorship::authorship_log_serialization::AuthorshipLog::new();
         let agent_id = crate::authorship::working_log::AgentId {
             tool: "cursor".to_string(),
             id: "session_3".to_string(),
@@ -1413,16 +1403,13 @@ mod tests {
             },
         );
 
-        let mut file_att =
-            crate::authorship::authorship_log_serialization::FileAttestation::new(
-                "foo.rs".to_string(),
-            );
+        let mut file_att = crate::authorship::authorship_log_serialization::FileAttestation::new(
+            "foo.rs".to_string(),
+        );
         file_att.add_entry(
             crate::authorship::authorship_log_serialization::AttestationEntry::new(
                 hash.clone(),
-                vec![
-                    crate::authorship::authorship_log::LineRange::Range(1, 3),
-                ],
+                vec![crate::authorship::authorship_log::LineRange::Range(1, 3)],
             ),
         );
         log.attestations.push(file_att);
