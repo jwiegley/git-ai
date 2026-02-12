@@ -1353,4 +1353,426 @@ mod tests {
         let parsed = parse_continue_args(&args).unwrap();
         assert_eq!(parsed.mode, ContinueMode::Interactive);
     }
+
+    // ---------------------------------------------------------------
+    // Tests for format_context_block() and format_context_json()
+    // ---------------------------------------------------------------
+
+    use crate::authorship::transcript::Message;
+    use crate::authorship::working_log::AgentId;
+
+    fn make_session_context() -> SessionContext {
+        SessionContext {
+            prompts: BTreeMap::new(),
+            commit_info: None,
+            commit_diffs: BTreeMap::new(),
+            project_context: None,
+            git_status: None,
+            max_messages: 50,
+        }
+    }
+
+    fn make_prompt_record(tool: &str, model: &str, messages: Vec<Message>) -> PromptRecord {
+        PromptRecord {
+            agent_id: AgentId {
+                tool: tool.to_string(),
+                id: "test-id".to_string(),
+                model: model.to_string(),
+            },
+            human_author: Some("testuser".to_string()),
+            messages,
+            total_additions: 0,
+            total_deletions: 0,
+            accepted_lines: 0,
+            overriden_lines: 0,
+            messages_url: None,
+        }
+    }
+
+    // --- Group 1: Message handling ---
+
+    #[test]
+    fn test_context_block_empty_messages() {
+        let mut ctx = make_session_context();
+        ctx.prompts.insert(
+            "prompt001".to_string(),
+            make_prompt_record("claude", "opus", vec![]),
+        );
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("# Restored AI Session Context"),
+            "missing header"
+        );
+        assert!(output.contains("### Conversation"), "missing conversation");
+        assert!(
+            !output.contains("**User**:"),
+            "should not contain User marker"
+        );
+        assert!(
+            !output.contains("**Assistant**:"),
+            "should not contain Assistant marker"
+        );
+    }
+
+    #[test]
+    fn test_context_block_max_messages_cap() {
+        let mut ctx = make_session_context();
+        ctx.max_messages = 3;
+        let mut msgs = Vec::new();
+        for i in 0..10 {
+            if i % 2 == 0 {
+                msgs.push(Message::user(format!("user msg {}", i), None));
+            } else {
+                msgs.push(Message::assistant(format!("assistant msg {}", i), None));
+            }
+        }
+        ctx.prompts.insert(
+            "prompt001".to_string(),
+            make_prompt_record("claude", "opus", msgs),
+        );
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("[... 7 earlier messages omitted]"),
+            "should show 7 omitted messages, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_context_block_tool_use_filtered() {
+        let mut ctx = make_session_context();
+        let msgs = vec![
+            Message::user("hello".to_string(), None),
+            Message::tool_use("read_file".to_string(), serde_json::json!({})),
+            Message::assistant("response".to_string(), None),
+        ];
+        ctx.prompts.insert(
+            "prompt001".to_string(),
+            make_prompt_record("claude", "opus", msgs),
+        );
+        let output = format_context_block(&ctx);
+        assert!(output.contains("**User**:"), "should contain User marker");
+        assert!(
+            output.contains("**Assistant**:"),
+            "should contain Assistant marker"
+        );
+        assert!(
+            !output.contains("read_file"),
+            "should not contain tool use name"
+        );
+    }
+
+    #[test]
+    fn test_context_block_section_headers() {
+        let mut ctx = make_session_context();
+        ctx.prompts.insert(
+            "prompt001".to_string(),
+            make_prompt_record("claude", "opus", vec![]),
+        );
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("# Restored AI Session Context"),
+            "missing main header"
+        );
+        assert!(
+            output.contains("## Session 1 of 1"),
+            "missing session header"
+        );
+        assert!(
+            output.contains("### Conversation"),
+            "missing conversation header"
+        );
+    }
+
+    // --- Group 2: Commit info ---
+
+    #[test]
+    fn test_context_block_no_commit_info() {
+        let ctx = make_session_context();
+        let output = format_context_block(&ctx);
+        assert!(
+            !output.contains("## Source"),
+            "should not have Source section"
+        );
+    }
+
+    #[test]
+    fn test_context_block_with_commit_info() {
+        let mut ctx = make_session_context();
+        ctx.commit_info = Some(CommitInfo {
+            sha: "abcdef1234567890".to_string(),
+            author: "Test Author".to_string(),
+            date: "2025-01-01".to_string(),
+            message: "Fix the bug".to_string(),
+            full_message: "Fix the bug".to_string(),
+        });
+        let output = format_context_block(&ctx);
+        assert!(output.contains("## Source"), "should have Source section");
+        assert!(output.contains("abcdef12"), "should contain shortened sha");
+        assert!(output.contains("Test Author"), "should contain author");
+        assert!(
+            !output.contains("## Commit Message"),
+            "should not have Commit Message when full_message == message"
+        );
+    }
+
+    #[test]
+    fn test_context_block_commit_full_message_differs() {
+        let mut ctx = make_session_context();
+        ctx.commit_info = Some(CommitInfo {
+            sha: "abcdef1234567890".to_string(),
+            author: "Test Author".to_string(),
+            date: "2025-01-01".to_string(),
+            message: "Fix the bug".to_string(),
+            full_message: "Fix the bug\n\nThis is the extended body.".to_string(),
+        });
+        let output = format_context_block(&ctx);
+        assert!(output.contains("## Source"), "should have Source section");
+        assert!(
+            output.contains("## Commit Message"),
+            "should have Commit Message when full_message differs"
+        );
+    }
+
+    #[test]
+    fn test_context_block_commit_diffs_included() {
+        let mut ctx = make_session_context();
+        ctx.commit_diffs.insert(
+            "abc12345".to_string(),
+            "--- a/file.rs\n+++ b/file.rs\n@@ -1,3 +1,4 @@\n+new line".to_string(),
+        );
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("## Commit Changes"),
+            "should have Commit Changes section"
+        );
+        assert!(
+            output.contains("### Commit abc12345"),
+            "should have commit sha sub-header"
+        );
+        assert!(output.contains("```diff"), "should have diff code block");
+    }
+
+    // --- Group 3: Project context ---
+
+    #[test]
+    fn test_context_block_no_project_context() {
+        let ctx = make_session_context();
+        let output = format_context_block(&ctx);
+        assert!(
+            !output.contains("## Project Instructions (CLAUDE.md)"),
+            "should not have project context section"
+        );
+    }
+
+    #[test]
+    fn test_context_block_with_project_context() {
+        let mut ctx = make_session_context();
+        ctx.project_context = Some("Test instructions here".to_string());
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("## Project Instructions (CLAUDE.md)"),
+            "should have project context section"
+        );
+        assert!(
+            output.contains("Test instructions here"),
+            "should contain the instructions text"
+        );
+    }
+
+    #[test]
+    fn test_context_block_project_context_truncated() {
+        let mut ctx = make_session_context();
+        let truncated = format!(
+            "{}... [... CLAUDE.md truncated at 50KB ({} bytes total)]",
+            "x".repeat(50 * 1024),
+            60 * 1024
+        );
+        ctx.project_context = Some(truncated);
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("CLAUDE.md truncated at 50KB"),
+            "should pass through truncation notice"
+        );
+    }
+
+    // --- Group 4: Git status ---
+
+    #[test]
+    fn test_context_block_no_git_status() {
+        let ctx = make_session_context();
+        let output = format_context_block(&ctx);
+        assert!(
+            !output.contains("gitStatus:"),
+            "should not have gitStatus section"
+        );
+    }
+
+    #[test]
+    fn test_context_block_with_git_status() {
+        let mut ctx = make_session_context();
+        ctx.git_status =
+            Some("Current branch: main\n\nRecent commits:\nabc1234 Fix bug\n".to_string());
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("gitStatus: This is the current state"),
+            "should have gitStatus preamble"
+        );
+        assert!(
+            output.contains("Current branch: main"),
+            "should contain branch info"
+        );
+        assert!(
+            output.contains("Recent commits:"),
+            "should contain recent commits"
+        );
+    }
+
+    // --- Group 5: JSON output ---
+
+    #[test]
+    fn test_context_json_output_structure() {
+        let mut ctx = make_session_context();
+        ctx.commit_info = Some(CommitInfo {
+            sha: "abcdef1234567890".to_string(),
+            author: "Test Author".to_string(),
+            date: "2025-01-01".to_string(),
+            message: "Fix bug".to_string(),
+            full_message: "Fix bug".to_string(),
+        });
+        ctx.project_context = Some("project context here".to_string());
+        ctx.git_status = Some("Current branch: main\n".to_string());
+        let msgs = vec![
+            Message::user("hello".to_string(), None),
+            Message::assistant("world".to_string(), None),
+        ];
+        ctx.prompts.insert(
+            "prompt001".to_string(),
+            make_prompt_record("claude", "opus", msgs),
+        );
+
+        let json_str = format_context_json(&ctx);
+        let value: serde_json::Value =
+            serde_json::from_str(&json_str).expect("should parse as valid JSON");
+
+        // source
+        assert!(!value["source"].is_null(), "source should not be null");
+        assert!(
+            value["source"]["sha"].is_string(),
+            "source.sha should be string"
+        );
+        assert!(
+            value["source"]["author"].is_string(),
+            "source.author should be string"
+        );
+        assert!(
+            value["source"]["date"].is_string(),
+            "source.date should be string"
+        );
+        assert!(
+            value["source"]["message"].is_string(),
+            "source.message should be string"
+        );
+
+        // prompts
+        let prompts = value["prompts"]
+            .as_array()
+            .expect("prompts should be array");
+        assert_eq!(prompts.len(), 1, "should have 1 prompt");
+        assert_eq!(
+            prompts[0]["tool"].as_str().unwrap(),
+            "claude",
+            "tool should match"
+        );
+        assert!(
+            prompts[0]["messages"].is_array(),
+            "messages should be array"
+        );
+
+        // project_context and git_status
+        assert!(
+            value["project_context"].is_string(),
+            "project_context should be string"
+        );
+        assert!(
+            value["git_status"].is_string(),
+            "git_status should be string"
+        );
+    }
+
+    #[test]
+    fn test_context_json_null_fields() {
+        let ctx = make_session_context();
+        let json_str = format_context_json(&ctx);
+        let value: serde_json::Value =
+            serde_json::from_str(&json_str).expect("should parse as valid JSON");
+
+        assert!(value["source"].is_null(), "source should be null");
+        assert!(
+            value["project_context"].is_null(),
+            "project_context should be null"
+        );
+        assert!(value["git_status"].is_null(), "git_status should be null");
+        let prompts = value["prompts"]
+            .as_array()
+            .expect("prompts should be array");
+        assert!(prompts.is_empty(), "prompts should be empty");
+    }
+
+    // --- Group 6: Diff truncation and edge cases ---
+
+    #[test]
+    fn test_context_block_diff_truncation_notice() {
+        let mut ctx = make_session_context();
+        let diff_text = format!(
+            "--- a/big.rs\n+++ b/big.rs\n{}\n[... diff truncated at 100KB (150000 bytes total)]",
+            "x".repeat(1000)
+        );
+        ctx.commit_diffs.insert("deadbeef".to_string(), diff_text);
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("diff truncated at 100KB"),
+            "should pass through diff truncation notice"
+        );
+    }
+
+    #[test]
+    fn test_context_block_multiple_sessions() {
+        let mut ctx = make_session_context();
+        ctx.prompts.insert(
+            "aaa_prompt".to_string(),
+            make_prompt_record("claude", "opus", vec![]),
+        );
+        ctx.prompts.insert(
+            "bbb_prompt".to_string(),
+            make_prompt_record("cursor", "gpt4", vec![]),
+        );
+        ctx.prompts.insert(
+            "ccc_prompt".to_string(),
+            make_prompt_record("aider", "sonnet", vec![]),
+        );
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("## Session 1 of 3"),
+            "should have session 1 of 3"
+        );
+        assert!(
+            output.contains("## Session 2 of 3"),
+            "should have session 2 of 3"
+        );
+        assert!(
+            output.contains("## Session 3 of 3"),
+            "should have session 3 of 3"
+        );
+    }
+
+    #[test]
+    fn test_context_block_footer() {
+        let ctx = make_session_context();
+        let output = format_context_block(&ctx);
+        assert!(
+            output.contains("You can now ask follow-up questions about this work."),
+            "should contain the footer text"
+        );
+    }
 }

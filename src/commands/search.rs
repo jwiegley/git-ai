@@ -1420,4 +1420,339 @@ mod tests {
         let err_msg = result.unwrap_err();
         assert!(err_msg.contains("start") && err_msg.contains("end"));
     }
+
+    // --- Shared test helpers for search filters ---
+
+    use crate::authorship::working_log::AgentId;
+
+    /// Create a minimal PromptRecord with the given tool name and optional human_author.
+    fn make_prompt(tool: &str, author: Option<&str>) -> PromptRecord {
+        PromptRecord {
+            agent_id: AgentId {
+                tool: tool.to_string(),
+                id: "test-id".to_string(),
+                model: "test-model".to_string(),
+            },
+            human_author: author.map(|a| a.to_string()),
+            messages: vec![],
+            total_additions: 0,
+            total_deletions: 0,
+            accepted_lines: 0,
+            overriden_lines: 0,
+            messages_url: None,
+        }
+    }
+
+    /// Create a SearchResult from hash->prompt pairs.
+    fn make_search_result(prompts: Vec<(&str, PromptRecord)>) -> SearchResult {
+        let mut result = SearchResult::new();
+        for (hash, prompt) in prompts {
+            result.prompts.insert(hash.to_string(), prompt);
+        }
+        result
+    }
+
+    #[test]
+    fn test_make_helpers_roundtrip() {
+        let prompt = make_prompt("claude", Some("Alice"));
+        assert_eq!(prompt.agent_id.tool, "claude");
+        assert_eq!(prompt.human_author, Some("Alice".to_string()));
+
+        let result = make_search_result(vec![
+            ("hash1", make_prompt("claude", Some("Alice"))),
+            ("hash2", make_prompt("cursor", Some("Bob"))),
+        ]);
+        assert_eq!(result.len(), 2);
+        assert!(!result.is_empty());
+
+        let p1 = result.prompts.get("hash1").unwrap();
+        assert_eq!(p1.agent_id.tool, "claude");
+        assert_eq!(p1.human_author, Some("Alice".to_string()));
+
+        let p2 = result.prompts.get("hash2").unwrap();
+        assert_eq!(p2.agent_id.tool, "cursor");
+        assert_eq!(p2.human_author, Some("Bob".to_string()));
+    }
+
+    #[test]
+    fn test_make_helpers_none_author_and_empty() {
+        // Edge case: None author
+        let prompt = make_prompt("copilot", None);
+        assert_eq!(prompt.agent_id.tool, "copilot");
+        assert!(prompt.human_author.is_none());
+        assert!(prompt.messages.is_empty());
+
+        // Edge case: empty prompts vec
+        let result = make_search_result(vec![]);
+        assert!(result.is_empty());
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_apply_filters_tool_with_helpers() {
+        let result = make_search_result(vec![
+            ("hash1", make_prompt("claude", Some("Alice"))),
+            ("hash2", make_prompt("cursor", Some("Bob"))),
+            ("hash3", make_prompt("Claude", Some("Carol"))),
+        ]);
+
+        let filters = SearchFilters {
+            tool: Some("claude".to_string()),
+            ..Default::default()
+        };
+
+        let filtered = apply_filters(result, &filters);
+        // Tool filtering is case-insensitive, so "claude" and "Claude" both match
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.prompts.contains_key("hash1"));
+        assert!(filtered.prompts.contains_key("hash3"));
+        assert!(!filtered.prompts.contains_key("hash2"));
+    }
+
+    #[test]
+    fn test_apply_filters_author_with_helpers() {
+        let result = make_search_result(vec![
+            ("hash1", make_prompt("claude", Some("Alice Smith"))),
+            ("hash2", make_prompt("cursor", None)),
+            ("hash3", make_prompt("claude", Some("Bob Jones"))),
+        ]);
+
+        let filters = SearchFilters {
+            author: Some("alice".to_string()),
+            ..Default::default()
+        };
+
+        let filtered = apply_filters(result, &filters);
+        // Author filtering is case-insensitive substring; None author does not match
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.prompts.contains_key("hash1"));
+    }
+
+    // ---------------------------------------------------------------
+    // apply_filters tests (Task 4)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_apply_filters_tool_single_match() {
+        let result = make_search_result(vec![
+            ("hash1", make_prompt("claude", None)),
+            ("hash2", make_prompt("cursor", None)),
+        ]);
+        let filters = SearchFilters {
+            tool: Some("claude".to_string()),
+            ..Default::default()
+        };
+        let filtered = apply_filters(result, &filters);
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.prompts.contains_key("hash1"));
+        assert!(!filtered.prompts.contains_key("hash2"));
+    }
+
+    #[test]
+    fn test_apply_filters_tool_no_match() {
+        let result = make_search_result(vec![("hash1", make_prompt("cursor", None))]);
+        let filters = SearchFilters {
+            tool: Some("claude".to_string()),
+            ..Default::default()
+        };
+        let filtered = apply_filters(result, &filters);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_apply_filters_author_single_match() {
+        let result = make_search_result(vec![
+            ("hash1", make_prompt("claude", Some("Alice"))),
+            ("hash2", make_prompt("claude", Some("Bob"))),
+        ]);
+        let filters = SearchFilters {
+            author: Some("Alice".to_string()),
+            ..Default::default()
+        };
+        let filtered = apply_filters(result, &filters);
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.prompts.contains_key("hash1"));
+        assert!(!filtered.prompts.contains_key("hash2"));
+    }
+
+    #[test]
+    fn test_apply_filters_author_no_match() {
+        let result = make_search_result(vec![
+            ("hash1", make_prompt("claude", Some("Alice"))),
+            ("hash2", make_prompt("cursor", Some("Bob"))),
+        ]);
+        let filters = SearchFilters {
+            author: Some("Charlie".to_string()),
+            ..Default::default()
+        };
+        let filtered = apply_filters(result, &filters);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_apply_filters_empty_filters_passthrough() {
+        let result = make_search_result(vec![
+            ("hash1", make_prompt("claude", Some("Alice"))),
+            ("hash2", make_prompt("cursor", Some("Bob"))),
+        ]);
+        let filters = SearchFilters::default();
+        let filtered = apply_filters(result, &filters);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.prompts.contains_key("hash1"));
+        assert!(filtered.prompts.contains_key("hash2"));
+    }
+
+    // ---------------------------------------------------------------
+    // parse_time_spec tests (Task 5)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parse_time_spec_days() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let result = parse_time_spec("7d").unwrap();
+        let expected = now - 7 * 86400;
+        assert!(
+            (result - expected).abs() < 5,
+            "Expected ~{}, got {}",
+            expected,
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_time_spec_hours() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let result = parse_time_spec("24h").unwrap();
+        let expected = now - 24 * 3600;
+        assert!(
+            (result - expected).abs() < 5,
+            "Expected ~{}, got {}",
+            expected,
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_time_spec_weeks() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let result = parse_time_spec("2w").unwrap();
+        let expected = now - 2 * 7 * 86400;
+        assert!(
+            (result - expected).abs() < 5,
+            "Expected ~{}, got {}",
+            expected,
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_time_spec_minutes() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let result = parse_time_spec("30m").unwrap();
+        let expected = now - 30 * 60;
+        assert!(
+            (result - expected).abs() < 5,
+            "Expected ~{}, got {}",
+            expected,
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_time_spec_unix_timestamp() {
+        let result = parse_time_spec("1700000000").unwrap();
+        assert_eq!(result, 1700000000);
+    }
+
+    #[test]
+    fn test_parse_time_spec_date_format() {
+        let result = parse_time_spec("2024-01-01").unwrap();
+        let expected = days_since_unix_epoch(2024, 1, 1).unwrap() * 86400;
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_parse_time_spec_invalid_format() {
+        let result = parse_time_spec("invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_time_spec_invalid_suffix() {
+        let result = parse_time_spec("7x");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_time_spec_zero_days() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let result = parse_time_spec("0d").unwrap();
+        assert!(
+            (result - now).abs() < 5,
+            "Expected ~{}, got {}",
+            now,
+            result
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // days_since_unix_epoch and is_leap_year tests (Task 5)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_days_since_unix_epoch_epoch() {
+        assert_eq!(days_since_unix_epoch(1970, 1, 1), Some(0));
+    }
+
+    #[test]
+    fn test_days_since_unix_epoch_known_date() {
+        assert_eq!(days_since_unix_epoch(2000, 1, 1), Some(10957));
+    }
+
+    #[test]
+    fn test_days_since_unix_epoch_invalid_month() {
+        assert_eq!(days_since_unix_epoch(2024, 13, 1), None);
+    }
+
+    #[test]
+    fn test_days_since_unix_epoch_invalid_day() {
+        assert_eq!(days_since_unix_epoch(2024, 1, 32), None);
+    }
+
+    #[test]
+    fn test_is_leap_year_regular() {
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(2023));
+    }
+
+    #[test]
+    fn test_is_leap_year_century() {
+        assert!(!is_leap_year(1900));
+        assert!(is_leap_year(2000));
+    }
+
+    #[test]
+    fn test_is_leap_year_400_year() {
+        assert!(is_leap_year(2000));
+    }
 }
