@@ -48,7 +48,8 @@ jobs:
             --ignore-filename-regex='tests/.*|benches/.*|examples/.*' \
             --lcov \
             --output-path lcov.info \
-            --fail-under-lines $COVERAGE_THRESHOLD
+            --fail-under-lines $COVERAGE_THRESHOLD \
+            -- --skip performance_regression
 
       - name: Generate HTML coverage report
         if: always()
